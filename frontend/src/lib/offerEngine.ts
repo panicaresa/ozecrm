@@ -264,80 +264,80 @@ export function buildOfferHtml(ctx: PdfContext): string {
   *{box-sizing:border-box}
   @page{size:A4;margin:12mm 10mm}
   html,body{margin:0;padding:0}
-  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;color:#0B1220;font-size:11px;line-height:1.45}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;color:#0B1220;font-size:10px;line-height:1.4}
   .doc{padding:0}
-  header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #30A0E3;padding-bottom:10px;margin-bottom:14px;page-break-inside:avoid}
-  .firm{font-size:10px;color:#475569;line-height:1.5;text-align:right}
-  .firm .firm-name{font-weight:800;color:#0B2545;font-size:11px}
+  header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #30A0E3;padding-bottom:8px;margin-bottom:10px;page-break-inside:avoid}
+  .firm{font-size:9px;color:#475569;line-height:1.4;text-align:right}
+  .firm .firm-name{font-weight:800;color:#0B2545;font-size:10px}
   .firm a{color:#30A0E3;text-decoration:none}
-  .title-block{margin-bottom:12px;display:flex;justify-content:space-between;gap:18px;page-break-inside:avoid}
-  .title-left h1{margin:0;font-size:10px;color:#64748B;text-transform:uppercase;letter-spacing:2px;font-weight:700}
-  .title-left .doc-title{font-size:22px;font-weight:900;color:#0B2545;letter-spacing:-1px;margin-top:2px;line-height:1.1}
-  .title-right{text-align:right;font-size:10px;color:#64748B}
-  .title-right .meta{margin:2px 0}
+  .title-block{margin-bottom:9px;display:flex;justify-content:space-between;gap:14px;page-break-inside:avoid}
+  .title-left h1{margin:0;font-size:9px;color:#64748B;text-transform:uppercase;letter-spacing:2px;font-weight:700}
+  .title-left .doc-title{font-size:20px;font-weight:900;color:#0B2545;letter-spacing:-1px;margin-top:2px;line-height:1.1}
+  .title-right{text-align:right;font-size:9px;color:#64748B}
+  .title-right .meta{margin:1px 0}
   .title-right b{color:#0B1220}
-  .client-box{background:#F1F5F9;border-left:4px solid #30A0E3;padding:10px 14px;border-radius:6px;margin-bottom:12px;display:flex;justify-content:space-between;gap:16px;page-break-inside:avoid}
-  .client-box .label{font-size:9px;color:#64748B;text-transform:uppercase;letter-spacing:1.2px;font-weight:700;margin-bottom:2px}
-  .client-box .value{font-size:13px;color:#0B2545;font-weight:700}
-  .client-box .addr{font-size:11px;color:#475569;margin-top:1px}
-  .intro{color:#334155;line-height:1.55;margin:0 0 12px 0;text-align:justify;font-size:11px}
-  .section-title{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:2px;color:#64748B;margin:10px 0 6px 0;padding-bottom:4px;border-bottom:1px solid #E2E8F0}
+  .client-box{background:#F1F5F9;border-left:4px solid #30A0E3;padding:7px 12px;border-radius:6px;margin-bottom:9px;display:flex;justify-content:space-between;gap:14px;page-break-inside:avoid}
+  .client-box .label{font-size:8px;color:#64748B;text-transform:uppercase;letter-spacing:1.2px;font-weight:700;margin-bottom:1px}
+  .client-box .value{font-size:12px;color:#0B2545;font-weight:700}
+  .client-box .addr{font-size:10px;color:#475569;margin-top:1px}
+  .intro{color:#334155;line-height:1.45;margin:0 0 10px 0;text-align:justify;font-size:10px}
+  .section-title{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:2px;color:#64748B;margin:8px 0 4px 0;padding-bottom:3px;border-bottom:1px solid #E2E8F0}
   /* Visualizations */
-  .viz-block{page-break-inside:avoid;margin-bottom:12px}
-  .viz-title{font-size:11px;font-weight:700;color:#0B2545;margin-bottom:6px}
-  .viz-row{display:flex;gap:10px;page-break-inside:avoid}
-  .viz-cell{flex:1;margin:0;border:1px solid #E2E8F0;border-radius:8px;overflow:hidden;background:#fff;page-break-inside:avoid}
-  .viz-img{width:100%;height:150px;overflow:hidden;background:#F1F5F9;display:flex;align-items:center;justify-content:center}
+  .viz-block{page-break-inside:avoid;margin-bottom:8px}
+  .viz-title{font-size:10px;font-weight:700;color:#0B2545;margin-bottom:4px}
+  .viz-row{display:flex;gap:8px;page-break-inside:avoid}
+  .viz-cell{flex:1;margin:0;border:1px solid #E2E8F0;border-radius:6px;overflow:hidden;background:#fff;page-break-inside:avoid}
+  .viz-img{width:100%;height:110px;overflow:hidden;background:#F1F5F9;display:flex;align-items:center;justify-content:center}
   .viz-img img{width:100%;height:100%;object-fit:cover;display:block}
-  .viz-img-empty{color:#94A3B8;font-size:10px;font-style:italic}
+  .viz-img-empty{color:#94A3B8;font-size:9px;font-style:italic}
   .viz-empty{opacity:0.7}
-  .viz-cap{color:#fff;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;text-align:center;padding:6px 8px}
+  .viz-cap{color:#fff;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1px;text-align:center;padding:4px 6px}
   /* Pricing table */
-  table.pricing{width:100%;border-collapse:collapse;font-size:10px;page-break-inside:auto}
+  table.pricing{width:100%;border-collapse:collapse;font-size:9px;page-break-inside:auto}
   table.pricing thead{display:table-header-group}
   table.pricing tr{page-break-inside:avoid}
-  table.pricing thead th{background:#0B2545;color:#fff;text-align:left;padding:7px 6px;font-size:9px;text-transform:uppercase;letter-spacing:1px;font-weight:700}
+  table.pricing thead th{background:#0B2545;color:#fff;text-align:left;padding:6px 5px;font-size:8px;text-transform:uppercase;letter-spacing:1px;font-weight:700}
   table.pricing thead th:first-child{border-top-left-radius:6px}
   table.pricing thead th:last-child{border-top-right-radius:6px}
   table.pricing tbody tr{border-bottom:1px solid #E2E8F0}
   table.pricing tbody tr:nth-child(even){background:#F8FAFC}
-  table.pricing td{padding:8px 6px;vertical-align:top}
-  .col-lp{width:26px;font-weight:700;color:#64748B;text-align:center}
-  .col-desc{font-size:11px}
+  table.pricing td{padding:5px 5px;vertical-align:top}
+  .col-lp{width:24px;font-weight:700;color:#64748B;text-align:center}
+  .col-desc{font-size:10px}
   .row-title{font-weight:700;color:#0B2545}
-  .row-sub{font-size:9px;color:#64748B;margin-top:2px}
-  .col-qty{width:42px;text-align:right;font-weight:600}
-  .col-unit{width:34px;color:#64748B}
-  .col-price,.col-value{width:78px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .row-sub{font-size:8px;color:#64748B;margin-top:1px}
+  .col-qty{width:38px;text-align:right;font-weight:600}
+  .col-unit{width:30px;color:#64748B}
+  .col-price,.col-value{width:72px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
   .col-value{font-weight:700;color:#0B2545}
-  .col-vat{width:70px;text-align:center}
-  .vat-badge{display:inline-block;padding:2px 7px;border-radius:999px;background:#E0F2FE;color:#0369A1;font-weight:700;font-size:9px}
-  /* Totals row — avoid split */
-  .totals-row{display:flex;gap:12px;margin-top:14px;align-items:flex-start;page-break-inside:avoid}
-  .warranty{flex:1;background:#EFF6FF;border:1px solid #BFDBFE;border-left:4px solid #30A0E3;padding:12px;border-radius:8px;page-break-inside:avoid}
-  .warranty h3{margin:0 0 4px 0;font-size:11px;color:#0B2545;text-transform:uppercase;letter-spacing:1px;font-weight:800}
-  .warranty p{margin:0;color:#1e3a5f;font-size:10px;line-height:1.5}
-  .summary{flex:1.1;background:#fff;border:1px solid #E2E8F0;border-radius:8px;padding:2px 12px;page-break-inside:avoid}
+  .col-vat{width:66px;text-align:center}
+  .vat-badge{display:inline-block;padding:1px 6px;border-radius:999px;background:#E0F2FE;color:#0369A1;font-weight:700;font-size:8px}
+  /* Totals row — KEEP WARRANTY + SUMMARY TOGETHER at all costs */
+  .totals-row{display:flex;gap:10px;margin-top:10px;align-items:flex-start;page-break-inside:avoid;page-break-before:auto}
+  .warranty{flex:1;background:#EFF6FF;border:1px solid #BFDBFE;border-left:4px solid #30A0E3;padding:10px;border-radius:7px;page-break-inside:avoid}
+  .warranty h3{margin:0 0 3px 0;font-size:10px;color:#0B2545;text-transform:uppercase;letter-spacing:1px;font-weight:800}
+  .warranty p{margin:0;color:#1e3a5f;font-size:9px;line-height:1.45}
+  .summary{flex:1.1;background:#fff;border:1px solid #E2E8F0;border-radius:7px;padding:2px 10px;page-break-inside:avoid}
   .summary table{width:100%;border-collapse:collapse}
-  .summary td{padding:6px 0;font-size:11px;border-bottom:1px solid #F1F5F9}
+  .summary td{padding:4px 0;font-size:10px;border-bottom:1px solid #F1F5F9}
   .summary tr:last-child td{border-bottom:none}
   .summary .label{color:#475569}
   .summary .value{text-align:right;font-weight:700;color:#0B1220;font-variant-numeric:tabular-nums;white-space:nowrap}
   .summary .muted .value{color:#64748B}
   .summary .discount .value{color:#EF4444}
-  .summary .gross{background:#0B2545;color:#fff;padding:10px 12px;border-radius:8px;margin:8px -12px;display:flex;justify-content:space-between;align-items:center;page-break-inside:avoid}
-  .summary .gross .label{color:#B6C5DB;font-size:9px;text-transform:uppercase;letter-spacing:1.3px;font-weight:700}
-  .summary .gross .amount{font-size:18px;font-weight:900;letter-spacing:-0.5px}
-  .summary .final{background:#F0FDF4;border:1px solid #BBF7D0;border-radius:6px;padding:8px 10px;margin:4px -4px;display:flex;justify-content:space-between;align-items:center;page-break-inside:avoid}
-  .summary .final .label{color:#166534;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px}
-  .summary .final .amount{color:#166534;font-size:15px;font-weight:900}
-  .installment{background:#30A0E3;color:#fff;padding:10px 12px;border-radius:8px;margin-top:8px;display:flex;justify-content:space-between;align-items:center;page-break-inside:avoid;page-break-before:avoid}
-  .installment .label{font-size:9px;text-transform:uppercase;letter-spacing:1.3px;font-weight:700;opacity:0.92}
-  .installment .sublabel{font-size:9px;opacity:0.85;margin-top:1px}
-  .installment .amount{font-size:18px;font-weight:900}
-  .installment .mo{font-size:10px;opacity:0.9}
-  .notice{margin-top:8px;padding:8px 10px;background:#FEF2F2;border-left:3px solid #EF4444;border-radius:4px;color:#991B1B;font-size:10px;page-break-inside:avoid}
-  .footer{margin-top:16px;padding-top:8px;border-top:1px solid #E2E8F0;text-align:center;font-size:8px;color:#94A3B8;line-height:1.5;page-break-inside:avoid;page-break-before:avoid}
+  .summary .gross{background:#0B2545;color:#fff;padding:8px 10px;border-radius:7px;margin:6px -10px;display:flex;justify-content:space-between;align-items:center;page-break-inside:avoid}
+  .summary .gross .label{color:#B6C5DB;font-size:8px;text-transform:uppercase;letter-spacing:1.3px;font-weight:700}
+  .summary .gross .amount{font-size:16px;font-weight:900;letter-spacing:-0.5px}
+  .summary .final{background:#F0FDF4;border:1px solid #BBF7D0;border-radius:6px;padding:6px 8px;margin:3px -3px;display:flex;justify-content:space-between;align-items:center;page-break-inside:avoid}
+  .summary .final .label{color:#166534;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:1px}
+  .summary .final .amount{color:#166534;font-size:13px;font-weight:900}
+  .installment{background:#30A0E3;color:#fff;padding:8px 10px;border-radius:7px;margin-top:6px;display:flex;justify-content:space-between;align-items:center;page-break-inside:avoid;page-break-before:avoid}
+  .installment .label{font-size:8px;text-transform:uppercase;letter-spacing:1.3px;font-weight:700;opacity:0.92}
+  .installment .sublabel{font-size:8px;opacity:0.85;margin-top:1px}
+  .installment .amount{font-size:16px;font-weight:900}
+  .installment .mo{font-size:9px;opacity:0.9}
+  .notice{margin-top:6px;padding:6px 8px;background:#FEF2F2;border-left:3px solid #EF4444;border-radius:4px;color:#991B1B;font-size:9px;page-break-inside:avoid}
+  .footer{margin-top:10px;padding-top:5px;border-top:1px solid #E2E8F0;text-align:center;font-size:8px;color:#94A3B8;line-height:1.4;page-break-inside:avoid;page-break-before:avoid}
 </style>
 </head>
 <body>
