@@ -25,6 +25,8 @@ export default function RepHome() {
   const [summary, setSummary] = useState<RepSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false); // Start/Stop mode
+  const [workLoading, setWorkLoading] = useState(false);
+  const [lastPush, setLastPush] = useState<Date | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const locationRef = useRef<{ stop?: () => void } | null>(null);
   const intervalRef = useRef<any>(null);
@@ -46,36 +48,48 @@ export default function RepHome() {
         battery,
         battery_state: batteryState,
       });
+      setLastPush(new Date());
     } catch (e) {
-      // swallow: field may have no GPS signal yet
       console.warn("Location push failed", (e as any)?.message);
     }
   }, []);
 
   const startWorkMode = useCallback(async () => {
-    const perm = await Location.requestForegroundPermissionsAsync();
-    if (perm.status !== "granted") {
-      Alert.alert(
-        "Brak uprawnień",
-        "Aby uruchomić tryb pracy, pozwól aplikacji na dostęp do lokalizacji."
-      );
-      return;
+    setWorkLoading(true);
+    try {
+      const perm = await Location.requestForegroundPermissionsAsync();
+      if (perm.status !== "granted") {
+        Alert.alert(
+          "Brak uprawnień",
+          "Aby uruchomić tryb pracy, pozwól aplikacji na dostęp do lokalizacji."
+        );
+        return;
+      }
+      setWorking(true); // immediate visual feedback
+      await pushLocation();
+      intervalRef.current = setInterval(pushLocation, 30000);
+      Alert.alert("Tryb pracy aktywny", "GPS wysyła Twoją pozycję do managera co 30 sekund.");
+    } finally {
+      setWorkLoading(false);
     }
-    setWorking(true);
-    await pushLocation();
-    intervalRef.current = setInterval(pushLocation, 30000); // every 30s
   }, [pushLocation]);
 
   const stopWorkMode = useCallback(async () => {
-    setWorking(false);
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
+    setWorkLoading(true);
     try {
-      await api.delete("/rep/location");
-    } catch {
-      /* ignore */
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+      setWorking(false);
+      setLastPush(null);
+      try {
+        await api.delete("/rep/location");
+      } catch {
+        /* ignore */
+      }
+    } finally {
+      setWorkLoading(false);
     }
   }, []);
 
@@ -215,6 +229,8 @@ const styles = StyleSheet.create({
   sub: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
   iconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.inverted, alignItems: "center", justifyContent: "center" },
   workCard: { margin: spacing.md, padding: spacing.lg, backgroundColor: colors.inverted, borderRadius: radius.lg, alignItems: "center" },
+  workLabelRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  pulseDot: { width: 8, height: 8, borderRadius: 4 },
   workLabel: { color: colors.textInverseSecondary, fontSize: 11, fontWeight: "900", letterSpacing: 2 },
   workBtn: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 20, paddingHorizontal: 32, borderRadius: 999, marginVertical: 16, minWidth: 260, justifyContent: "center", shadowColor: "#000", shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
   workBtnText: { color: "#fff", fontSize: 18, fontWeight: "900", letterSpacing: 1 },

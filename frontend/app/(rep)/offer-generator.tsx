@@ -64,6 +64,9 @@ export default function OfferGenerator() {
   const [rrsoIdx, setRrsoIdx] = useState(1); // Santander default
   const [postalCode, setPostalCode] = useState("");
   const [generating, setGenerating] = useState(false);
+  const [intro, setIntro] = useState(
+    "Szanowni Państwo, dziękujemy za zainteresowanie naszą ofertą. Przedstawiamy kompletny kosztorys kompleksowej modernizacji dachu przygotowany indywidualnie pod Państwa inwestycję, uwzględniający obowiązujące stawki VAT oraz — jeśli wybrano tę opcję — symulację finansowania w ramach Eko-Abonamentu."
+  );
 
   useEffect(() => {
     (async () => {
@@ -151,6 +154,9 @@ export default function OfferGenerator() {
           phone: settings?.company_phone || "+48 509-274-365",
         },
         rrsoLabel: `${rrsoRates[rrsoIdx]?.label || "Bank"} RRSO ${rrsoRates[rrsoIdx]?.value}%`,
+        intro,
+        logoDataUrl: LOGO_PNG_BASE64,
+        logoRemoteUrl: "https://grupaoze.pl/wp-content/uploads/2025/12/x1.png.pagespeed.ic.FHpTwhhqvK.webp",
       });
 
       if (Platform.OS === "web") {
@@ -375,6 +381,18 @@ export default function OfferGenerator() {
           {step === 4 && (
             <>
               <Text style={styles.stepTitle}>4. Podsumowanie</Text>
+
+              <Text style={styles.sectionLabel}>Tekst wstępny oferty (edytowalny)</Text>
+              <Field
+                placeholder="Tekst wstępny, który pojawi się w PDF…"
+                value={intro}
+                onChangeText={setIntro}
+                multiline
+                numberOfLines={6}
+                style={{ height: 140, textAlignVertical: "top" }}
+                testID="offer-intro-textarea"
+              />
+
               <View style={styles.summaryCard}>
                 <SummaryRow label="Klient" value={clientName || "—"} />
                 <SummaryRow label="Adres" value={clientAddress || "—"} />

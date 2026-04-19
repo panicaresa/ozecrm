@@ -79,28 +79,7 @@ export const LeadMap: React.FC<Props> = ({
     <View style={[styles.wrap, { minHeight: height }]} testID={testID}>
       <View style={styles.header}>
         <Feather name="map" size={14} color={colors.textInverseSecondary} />
-        <Text style={styles.headerText}>LEAD MAP</Text>
-        <View style={{ flex: 1 }} />
-        {onToggleLayer && (
-          <View style={styles.toggleBar}>
-            <TouchableOpacity
-              style={[styles.toggle, layers.leads && styles.toggleOn]}
-              onPress={() => onToggleLayer("leads")}
-              testID="layer-toggle-leads"
-            >
-              <Feather name="map-pin" size={12} color={layers.leads ? "#fff" : colors.textInverseSecondary} />
-              <Text style={[styles.toggleText, layers.leads && { color: "#fff" }]}>Leady ({validLeads.length})</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.toggle, layers.reps && styles.toggleOn]}
-              onPress={() => onToggleLayer("reps")}
-              testID="layer-toggle-reps"
-            >
-              <Feather name="users" size={12} color={layers.reps ? "#fff" : colors.textInverseSecondary} />
-              <Text style={[styles.toggleText, layers.reps && { color: "#fff" }]}>Handlowcy ({validReps.length})</Text>
-            </TouchableOpacity>
-          </View>
-        )}
+        <Text style={styles.headerText}>MAPA · {validLeads.length} leadów · {validReps.length} handlowców</Text>
       </View>
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 12, gap: 8 }}>
@@ -121,7 +100,7 @@ export const LeadMap: React.FC<Props> = ({
                   <View style={[styles.onlineDot, { backgroundColor: dotColor }]} />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.repName} numberOfLines={1}>{r.name}</Text>
+                  <Text style={styles.repName} numberOfLines={1}>👤 {r.name}</Text>
                   <Text style={styles.repMeta}>
                     {r.active ? formatWorkTime(r.last_seen_seconds) : `Offline · ${formatLastSeen(r.last_seen_seconds)}`}
                     {typeof r.battery === "number" && ` · 🔋 ${Math.round(r.battery * 100)}%`}

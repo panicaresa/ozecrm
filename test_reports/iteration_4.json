@@ -1,0 +1,121 @@
+{
+  "summary": "Phase 1.3 testing complete. Backend: 35/35 tests passed (100% regression). Frontend: Manager dashboard layer toggles working correctly (prominently visible above map, toggle functionality verified). Offer generator intro textarea working. Rep work-mode button state transitions working correctly (green→red, ROZPOCZNIJ→ZATRZYMAJ) when geolocation permission granted. CRITICAL BUG FIXED: offer-generator.tsx was missing intro, logoDataUrl, and logoRemoteUrl parameters in buildOfferHtml call.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_oze_crm_api.py",
+    "/app/test_reports/pytest/pytest_results_iteration4.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "✅ Backend regression: All 35 tests passed (auth, settings, dashboard, leads, users, documents, rep location)",
+    "✅ Manager dashboard: Layer toggles (testID layer-toggle-leads, layer-toggle-reps) are prominently visible ABOVE the map with checkbox-style UI",
+    "✅ Manager dashboard: Toggle labels show 'Pokaż Leady (16)' and 'Pokaż Handlowców (1)' with correct counts",
+    "✅ Manager dashboard: Clicking toggles correctly hides/shows lead pins and rep pins in the web fallback list",
+    "✅ Manager dashboard: Toggles have visual feedback (background color changes when active: blue for leads, green for reps)",
+    "✅ Offer generator: Step 4 has editable intro textarea with testID offer-intro-textarea",
+    "✅ Offer generator: Intro textarea is pre-filled with default text about 'kompleksowej modernizacji dachu'",
+    "✅ Offer generator: User can edit intro text (verified by typing 'DUMMY_INTRO_XYZ')",
+    "🐛 FIXED: offer-generator.tsx was missing intro, logoDataUrl, and logoRemoteUrl parameters in buildOfferHtml call (lines 141-157)",
+    "✅ offerEngine.ts: buildOfferHtml correctly renders logo with URL + base64 fallback (lines 209-216)",
+    "✅ offerEngine.ts: buildOfferHtml correctly renders intro paragraph with HTML escaping and newline conversion (lines 223-225, 336-338)",
+    "✅ Rep home: Work-mode button (testID toggle-work-mode-button) shows correct initial state (green background rgb(132, 209, 60), label 'ROZPOCZNIJ')",
+    "✅ Rep home: When geolocation permission granted, clicking button changes state to red background rgb(239, 68, 68) and label 'ZATRZYMAJ'",
+    "✅ Rep home: Status label shows 'TRYB PRACY' when active",
+    "✅ Rep home: Clicking button again reverts to initial state (green, 'ROZPOCZNIJ')",
+    "✅ Rep home: Button state transitions work correctly (loading → active → idle)",
+    "⚠️ Rep home: On web without geolocation permission, button does NOT change state (expected behavior - permission denied shows alert and exits early)",
+    "✅ Rep home: Work-mode button uses colors.error (red) for active state and colors.secondary (green) for idle state",
+    "✅ Rep home: Button label changes from 'ROZPOCZNIJ' to 'ZATRZYMAJ' when active",
+    "✅ Rep home: Hint text changes from 'Uruchom tryb pracy...' to 'Tryb pracy aktywny · pozycja GPS wysyłana co 30 s' when active"
+  ],
+  "updated_files": [
+    "/app/frontend/app/(rep)/offer-generator.tsx"
+  ],
+  "success_rate": {
+    "backend": "100% (35/35 tests passed)",
+    "frontend": "100% (all Phase 1.3 features verified, 1 critical bug fixed)"
+  },
+  "seed_data_creation": "No new seed data created. Existing seed data from previous iterations used for testing.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Phase 1.3 complete. Manager dashboard layer toggles prominently visible above map with correct testIDs and toggle functionality. Offer generator intro textarea working with editable default text. Rep work-mode button state transitions working correctly (green→red, ROZPOCZNIJ→ZATRZYMAJ) when geolocation permission granted. Critical bug fixed: offer-generator.tsx was missing intro, logoDataUrl, and logoRemoteUrl parameters in buildOfferHtml call. All 35 backend tests passing (no regressions).",
+  "backend_test_details": {
+    "regression_tests": {
+      "auth_tests": "✅ ALL PASSED (5/5) - Login, auth/me working for all roles",
+      "settings_tests": "✅ ALL PASSED (3/3) - GET/PUT settings, admin-only access",
+      "dashboard_tests": "✅ ALL PASSED (3/3) - Manager + rep dashboards, role-based access",
+      "leads_tests": "✅ ALL PASSED (6/6) - GET leads, create, update status, update note, manager dashboard status_breakdown",
+      "users_tests": "✅ ALL PASSED (7/7) - Register, GET users, delete, role-based access",
+      "documents_tests": "✅ ALL PASSED (6/6) - Upload, list, get, delete documents with proper access control",
+      "rep_location_tests": "✅ ALL PASSED (5/5) - PUT/DELETE rep location, manager dashboard reps_live"
+    }
+  },
+  "frontend_test_details": {
+    "manager_dashboard_layer_toggles": {
+      "layer_toggle_leads_visible": "✅ PASSED - testID layer-toggle-leads found, label 'Pokaż Leady (16)'",
+      "layer_toggle_reps_visible": "✅ PASSED - testID layer-toggle-reps found, label 'Pokaż Handlowców (1)'",
+      "toggles_above_map": "✅ PASSED - Toggles are prominently visible ABOVE the map (lines 195-224 in manager/index.tsx)",
+      "toggle_leads_functionality": "✅ PASSED - Clicking toggle hides/shows lead pins (16 pins → 0 pins → 16 pins)",
+      "toggle_reps_functionality": "✅ PASSED - Clicking toggle hides/shows rep pins (1 pin → 0 pins → 1 pin)",
+      "toggle_visual_feedback": "✅ PASSED - Toggles have checkbox-style UI with background color change when active",
+      "toggle_counts": "✅ PASSED - Toggle labels show correct counts (16 leads, 1 rep)"
+    },
+    "offer_generator_pdf_fixes": {
+      "intro_textarea_visible": "✅ PASSED - testID offer-intro-textarea found on step 4",
+      "intro_textarea_label": "✅ PASSED - Label 'TEKST WSTĘPNY OFERTY (EDYTOWALNY)' visible",
+      "intro_default_text": "✅ PASSED - Pre-filled with default text about 'kompleksowej modernizacji dachu'",
+      "intro_editable": "✅ PASSED - User can edit text (typed 'DUMMY_INTRO_XYZ' successfully)",
+      "generate_pdf_button": "✅ PASSED - testID generate-pdf-button clickable, triggers PDF generation",
+      "buildOfferHtml_parameters": "🐛 FIXED - offer-generator.tsx was missing intro, logoDataUrl, logoRemoteUrl parameters (added in fix)",
+      "logo_url_with_fallback": "✅ VERIFIED - offerEngine.ts lines 209-216 implement logo with URL + base64 fallback",
+      "intro_html_rendering": "✅ VERIFIED - offerEngine.ts lines 223-225, 336-338 render intro with HTML escaping and newline conversion"
+    },
+    "rep_work_mode_button": {
+      "button_visible": "✅ PASSED - testID toggle-work-mode-button found",
+      "initial_state": "✅ PASSED - Green background rgb(132, 209, 60), label 'ROZPOCZNIJ'",
+      "click_with_permission": "✅ PASSED - With geolocation permission, button changes to red rgb(239, 68, 68) and label 'ZATRZYMAJ'",
+      "status_label": "✅ PASSED - Status label shows 'TRYB PRACY' when active",
+      "revert_to_idle": "✅ PASSED - Clicking again reverts to green 'ROZPOCZNIJ'",
+      "state_transitions": "✅ PASSED - Button state transitions work correctly (idle → active → idle)",
+      "permission_denied_behavior": "✅ VERIFIED - Without permission, button does NOT change state (expected - alert shown, exits early)",
+      "color_mapping": "✅ VERIFIED - colors.error (red) for active, colors.secondary (green) for idle",
+      "label_mapping": "✅ VERIFIED - 'ROZPOCZNIJ' for idle, 'ZATRZYMAJ' for active",
+      "hint_text": "✅ VERIFIED - Hint text changes based on working state"
+    }
+  },
+  "notes": {
+    "layer_toggles": "Layer toggles are prominently visible ABOVE the map (lines 195-224 in manager/index.tsx) with checkbox-style UI. Each toggle has a checkbox icon, map icon, and label with count. Background color changes when active (blue for leads, green for reps). Toggles control visibility of lead pins and rep pins in the web fallback list.",
+    "offer_intro_textarea": "Intro textarea is on step 4 (Podsumowanie) with testID offer-intro-textarea. Pre-filled with default text about 'kompleksowej modernizacji dachu'. User can edit text freely. The edited text is passed to buildOfferHtml via intro parameter.",
+    "pdf_logo_fix": "CRITICAL BUG FIXED: offer-generator.tsx was missing intro, logoDataUrl, and logoRemoteUrl parameters in buildOfferHtml call. Added: intro (editable text), logoDataUrl (LOGO_PNG_BASE64), logoRemoteUrl (https://grupaoze.pl/wp-content/uploads/2025/12/x1.png.pagespeed.ic.FHpTwhhqvK.webp). The logo URL is used as primary source with base64 fallback via onerror attribute.",
+    "pdf_intro_rendering": "offerEngine.ts buildOfferHtml function (lines 223-225, 336-338) correctly renders intro paragraph with HTML escaping (escapeHtml function) and newline conversion (replace /\\n/g with <br/>). If intro is empty, default text is used.",
+    "work_mode_button": "Work-mode button state transitions work correctly when geolocation permission is granted. Button changes from green 'ROZPOCZNIJ' to red 'ZATRZYMAJ' when active. Status label shows 'TRYB PRACY'. Clicking again reverts to idle state. On web without geolocation permission, button does NOT change state (expected behavior - permission denied shows alert and exits early via return statement in startWorkMode).",
+    "geolocation_permission": "On web, geolocation permission is denied by default in headless Playwright. To test button state transitions, geolocation permission must be granted via context.grant_permissions(['geolocation']). Without permission, the button shows an alert 'Brak uprawnień' and does NOT change state (working stays false).",
+    "backend_regression": "All 35 backend tests passed (100% success rate). No regressions detected. Tests cover auth, settings, dashboard, leads, users, documents, and rep location endpoints.",
+    "rep_pins_prefix": "Rep pins in the web fallback list are prefixed with '👤' emoji (line 103 in LeadMap.tsx). Battery percentage is shown if provided (line 106).",
+    "layer_toggle_ui": "Layer toggles have checkbox-style UI with: (1) checkbox icon (Feather check icon when active), (2) map icon (map-pin for leads, users for reps), (3) label with count. Background color changes when active (colors.primary for leads, colors.secondary for reps). Border color also changes to match background.",
+    "offer_generator_steps": "Offer generator has 4 steps: (1) Dane klienta, (2) Obiekty, (3) Parametry finansowe, (4) Podsumowanie. Intro textarea is on step 4. Generate PDF button is also on step 4.",
+    "pdf_generation_web": "On web, PDF generation opens a new window with HTML content (window.open). The HTML is written to the new window via w.document.write(html). On native, PDF is generated via expo-print and shared via expo-sharing."
+  },
+  "rca_of_issue": {
+    "issue": "Offer generator PDF was missing intro text, logo URL, and base64 fallback",
+    "root_cause": "offer-generator.tsx buildOfferHtml call (lines 141-157) was missing intro, logoDataUrl, and logoRemoteUrl parameters. The main agent implemented the intro textarea UI and offerEngine logic but forgot to pass these parameters to buildOfferHtml.",
+    "reproduction_steps": [
+      "1. Login as handlowiec",
+      "2. Open offer generator",
+      "3. Fill step 1-3 and go to step 4",
+      "4. Edit intro textarea",
+      "5. Click 'Generuj PDF'",
+      "6. PDF would NOT contain edited intro text or logo with fallback"
+    ],
+    "mitigation": "Added intro, logoDataUrl, and logoRemoteUrl parameters to buildOfferHtml call in offer-generator.tsx (lines 157-159). Now PDF correctly renders: (1) edited intro text, (2) logo via URL with base64 fallback."
+  }
+}

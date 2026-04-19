@@ -184,17 +184,49 @@ export default function ManagerDashboard() {
         </View>
 
         <View style={[styles.sectionCard, { padding: 0, overflow: "hidden" }]}>
-          <View style={[styles.sectionHead, { padding: spacing.md }]}>
+          <View style={[styles.sectionHead, { padding: spacing.md, paddingBottom: 8 }]}>
             <Text style={styles.sectionTitle}>Lead Map · Live</Text>
             <Text style={styles.sectionSub}>
               {(data?.pins || []).length} leadów · {(data?.reps_live || []).length} handlowców
             </Text>
           </View>
+
+          {/* Prominent layer toggles ABOVE the map — clearly visible */}
+          <View style={styles.layerBar}>
+            <TouchableOpacity
+              style={[styles.layerToggle, layers.leads && { backgroundColor: colors.primary, borderColor: colors.primary }]}
+              onPress={() => setLayers((l) => ({ ...l, leads: !l.leads }))}
+              activeOpacity={0.8}
+              testID="layer-toggle-leads"
+            >
+              <View style={[styles.layerCheckbox, layers.leads && { backgroundColor: "#fff", borderColor: "#fff" }]}>
+                {layers.leads && <Feather name="check" size={12} color={colors.primary} />}
+              </View>
+              <Feather name="map-pin" size={14} color={layers.leads ? "#fff" : colors.textPrimary} />
+              <Text style={[styles.layerText, layers.leads && { color: "#fff" }]}>
+                Pokaż Leady ({(data?.pins || []).length})
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.layerToggle, layers.reps && { backgroundColor: colors.secondary, borderColor: colors.secondary }]}
+              onPress={() => setLayers((l) => ({ ...l, reps: !l.reps }))}
+              activeOpacity={0.8}
+              testID="layer-toggle-reps"
+            >
+              <View style={[styles.layerCheckbox, layers.reps && { backgroundColor: "#fff", borderColor: "#fff" }]}>
+                {layers.reps && <Feather name="check" size={12} color={colors.secondary} />}
+              </View>
+              <Feather name="users" size={14} color={layers.reps ? "#fff" : colors.textPrimary} />
+              <Text style={[styles.layerText, layers.reps && { color: "#fff" }]}>
+                Pokaż Handlowców ({(data?.reps_live || []).length})
+              </Text>
+            </TouchableOpacity>
+          </View>
+
           <LeadMap
             pins={data?.pins || []}
             reps={data?.reps_live || []}
             layers={layers}
-            onToggleLayer={(k) => setLayers((l) => ({ ...l, [k]: !l[k] }))}
             selectedId={selectedPinId}
             selectedRepId={selectedRepId}
             onSelectPin={(id) => {
@@ -310,4 +342,8 @@ const styles = StyleSheet.create({
   drillName: { color: colors.textPrimary, fontWeight: "700", fontSize: 14 },
   drillSub: { color: colors.textSecondary, fontSize: 12, marginTop: 2 },
   drillStatus: { fontSize: 10, fontWeight: "800", textTransform: "uppercase", letterSpacing: 0.5 },
+  layerBar: { flexDirection: "row", gap: 8, paddingHorizontal: spacing.md, paddingBottom: spacing.sm },
+  layerToggle: { flex: 1, flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 12, paddingHorizontal: 12, borderRadius: radius.md, borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.paper },
+  layerCheckbox: { width: 18, height: 18, borderRadius: 4, borderWidth: 1.5, borderColor: colors.border, alignItems: "center", justifyContent: "center", backgroundColor: "transparent" },
+  layerText: { flex: 1, fontSize: 12, fontWeight: "800", color: colors.textPrimary, letterSpacing: 0.3 },
 });

@@ -173,11 +173,13 @@ export interface PdfContext {
     phone: string;
   };
   rrsoLabel: string;
-  logoDataUrl?: string; // base64 data-url of brand logo
+  logoDataUrl?: string; // base64 data-url of brand logo (offline fallback)
+  logoRemoteUrl?: string; // remote URL for the brand logo
+  intro?: string; // editable intro paragraph shown above the pricing table
 }
 
 export function buildOfferHtml(ctx: PdfContext): string {
-  const { buildings, totals, cfg, client, author, validity, company, rrsoLabel, logoDataUrl } = ctx;
+  const { buildings, totals, cfg, client, author, validity, company, rrsoLabel, logoDataUrl, logoRemoteUrl, intro } = ctx;
   const today = new Date().toLocaleDateString("pl-PL");
 
   const rows = buildings
@@ -192,7 +194,7 @@ export function buildOfferHtml(ctx: PdfContext): string {
       <tr>
         <td class="col-lp">${i + 1}</td>
         <td class="col-desc">
-          <div class="row-title">Modernizacja dachu + PV — ${escapeHtml(b.name)}</div>
+          <div class="row-title">${escapeHtml(b.name)} — modernizacja dachu</div>
           <div class="row-sub">${subtitle}</div>
         </td>
         <td class="col-qty">${b.area}</td>
@@ -204,14 +206,23 @@ export function buildOfferHtml(ctx: PdfContext): string {
     })
     .join("");
 
-  const headerLogo = logoDataUrl
-    ? `<img src="${logoDataUrl}" alt="Grupa OZE" style="height:40px;width:auto" />`
+  // Logo: use remote URL as primary (always the latest brand mark), fallback to embedded base64 PNG if URL fails to load (e.g. offline)
+  const primarySrc = logoRemoteUrl || logoDataUrl || "";
+  const fallbackSrc = logoDataUrl && logoRemoteUrl ? logoDataUrl : "";
+  const headerLogo = primarySrc
+    ? `<img src="${primarySrc}" alt="Grupa OZE" style="height:44px;width:auto;display:block"${
+        fallbackSrc ? ` onerror="this.onerror=null;this.src='${fallbackSrc}'"` : ""
+      } />`
     : `<div style="font-weight:900;letter-spacing:-1px;font-size:24px;color:#0B2545">GRUPA <span style="color:#30A0E3">OZE</span></div>`;
 
   const showDiscount = cfg.discountEnabled && cfg.discount > 0;
   const showSubsidy = cfg.subsidyEnabled && cfg.subsidy > 0;
   const showInstallment = cfg.installments && totals.monthlyInstallment !== null;
   const finalPayable = showSubsidy || showDiscount ? totals.finalCost : totals.grossTotal;
+
+  const introHtml = (intro || "").trim()
+    ? escapeHtml(intro!).replace(/\n/g, "<br/>")
+    : "";
 
   return `<!doctype html>
 <html lang="pl">
@@ -323,11 +334,7 @@ export function buildOfferHtml(ctx: PdfContext): string {
 </div>
 
 <p class="intro">
-  Szanowni Państwo, dziękujemy za zainteresowanie naszą ofertą. Poniżej przedstawiamy kompletny
-  kosztorys kompleksowej modernizacji dachu wraz z instalacją systemu fotowoltaicznego,
-  uwzględniający obowiązujące stawki VAT${showSubsidy || showDiscount ? ", rabaty oraz dofinansowanie" : ""}${
-    showInstallment ? " oraz symulację finansowania w ramach Eko-Abonamentu" : ""
-  }.
+  ${introHtml || "Szanowni Państwo, dziękujemy za zainteresowanie naszą ofertą. Poniżej przedstawiamy kompletny kosztorys przygotowany indywidualnie pod Państwa inwestycję, uwzględniający obowiązujące stawki VAT oraz — jeśli wybrano tę opcję — symulację finansowania."}
 </p>
 
 <div class="section-title">Kosztorys</div>
