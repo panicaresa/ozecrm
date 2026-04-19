@@ -563,3 +563,441 @@ class TestUsers:
             headers={"Authorization": f"Bearer {manager_token}"}
         )
         assert response.status_code == 403, f"Expected 403, got {response.status_code}"
+
+
+# ============ DOCUMENTS TESTS (Phase 1.2) ============
+class TestDocuments:
+    """Lead documents endpoint tests (Phase 1.2)"""
+
+    def test_upload_document_as_assigned_handlowiec(self, api_client, rep_token):
+        """POST /api/leads/{id}/documents as assigned handlowiec uploads document and returns metadata"""
+        # Get a lead assigned to this handlowiec
+        leads_response = api_client.get(
+            f"{BASE_URL}/api/leads",
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        leads = leads_response.json()
+        
+        if len(leads) == 0:
+            pytest.skip("No leads available for document upload")
+        
+        lead_id = leads[0]["id"]
+        
+        # Create a small base64 image (1x1 red pixel PNG)
+        small_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+        
+        doc_data = {
+            "type": "photo",
+            "filename": "test-photo.png",
+            "mime": "image/png",
+            "data_base64": small_image_base64
+        }
+        
+        upload_response = api_client.post(
+            f"{BASE_URL}/api/leads/{lead_id}/documents",
+            json=doc_data,
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        assert upload_response.status_code == 200, f"Expected 200, got {upload_response.status_code}: {upload_response.text}"
+        
+        uploaded_doc = upload_response.json()
+        assert "id" in uploaded_doc
+        assert uploaded_doc["type"] == "photo"
+        assert uploaded_doc["filename"] == "test-photo.png"
+        assert uploaded_doc["mime"] == "image/png"
+        assert "data_base64" not in uploaded_doc, "Response should not include data_base64 (metadata only)"
+        
+        # Verify persistence with GET
+        list_response = api_client.get(
+            f"{BASE_URL}/api/leads/{lead_id}/documents",
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        assert list_response.status_code == 200
+        docs = list_response.json()
+        assert any(d["id"] == uploaded_doc["id"] for d in docs), "Uploaded document not found in list"
+
+    def test_list_documents(self, api_client, rep_token):
+        """GET /api/leads/{id}/documents returns metadata list without data_base64"""
+        # Get a lead
+        leads_response = api_client.get(
+            f"{BASE_URL}/api/leads",
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        leads = leads_response.json()
+        
+        if len(leads) == 0:
+            pytest.skip("No leads available")
+        
+        lead_id = leads[0]["id"]
+        
+        list_response = api_client.get(
+            f"{BASE_URL}/api/leads/{lead_id}/documents",
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        assert list_response.status_code == 200, f"Expected 200, got {list_response.status_code}: {list_response.text}"
+        
+        docs = list_response.json()
+        assert isinstance(docs, list)
+        
+        # If there are documents, verify structure
+        if len(docs) > 0:
+            doc = docs[0]
+            assert "id" in doc
+            assert "type" in doc
+            assert "filename" in doc
+            assert "mime" in doc
+            assert "data_base64" not in doc, "List endpoint should not return data_base64"
+
+    def test_get_single_document_with_data(self, api_client, rep_token):
+        """GET /api/leads/{id}/documents/{doc_id} returns document with data_base64"""
+        # Get a lead and upload a document first
+        leads_response = api_client.get(
+            f"{BASE_URL}/api/leads",
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        leads = leads_response.json()
+        
+        if len(leads) == 0:
+            pytest.skip("No leads available")
+        
+        lead_id = leads[0]["id"]
+        
+        # Upload a test document
+        small_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+        doc_data = {
+            "type": "umowa",
+            "filename": "test-contract.png",
+            "mime": "image/png",
+            "data_base64": small_image_base64
+        }
+        
+        upload_response = api_client.post(
+            f"{BASE_URL}/api/leads/{lead_id}/documents",
+            json=doc_data,
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        
+        if upload_response.status_code != 200:
+            pytest.skip("Could not upload test document")
+        
+        doc_id = upload_response.json()["id"]
+        
+        # Get the document with data
+        get_response = api_client.get(
+            f"{BASE_URL}/api/leads/{lead_id}/documents/{doc_id}",
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        assert get_response.status_code == 200, f"Expected 200, got {get_response.status_code}: {get_response.text}"
+        
+        doc = get_response.json()
+        assert doc["id"] == doc_id
+        assert doc["type"] == "umowa"
+        assert "data_base64" in doc, "Single document endpoint should return data_base64"
+        assert doc["data_base64"] == small_image_base64
+
+    def test_delete_document(self, api_client, rep_token):
+        """DELETE /api/leads/{id}/documents/{doc_id} removes document"""
+        # Get a lead and upload a document
+        leads_response = api_client.get(
+            f"{BASE_URL}/api/leads",
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        leads = leads_response.json()
+        
+        if len(leads) == 0:
+            pytest.skip("No leads available")
+        
+        lead_id = leads[0]["id"]
+        
+        # Upload a test document
+        small_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+        doc_data = {
+            "type": "other",
+            "filename": "to-delete.png",
+            "mime": "image/png",
+            "data_base64": small_image_base64
+        }
+        
+        upload_response = api_client.post(
+            f"{BASE_URL}/api/leads/{lead_id}/documents",
+            json=doc_data,
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        
+        if upload_response.status_code != 200:
+            pytest.skip("Could not upload test document")
+        
+        doc_id = upload_response.json()["id"]
+        
+        # Delete the document
+        delete_response = api_client.delete(
+            f"{BASE_URL}/api/leads/{lead_id}/documents/{doc_id}",
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        assert delete_response.status_code == 200, f"Expected 200, got {delete_response.status_code}: {delete_response.text}"
+        
+        # Verify deletion - GET should return 404
+        get_response = api_client.get(
+            f"{BASE_URL}/api/leads/{lead_id}/documents/{doc_id}",
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        assert get_response.status_code == 404, f"Expected 404 after deletion, got {get_response.status_code}"
+
+    def test_upload_document_as_non_assigned_handlowiec_forbidden(self, api_client):
+        """POST /api/leads/{id}/documents as non-assigned handlowiec returns 403"""
+        # Login as handlowiec@test.com
+        rep1_response = api_client.post(
+            f"{BASE_URL}/api/auth/login",
+            json={"email": "handlowiec@test.com", "password": "test1234"}
+        )
+        
+        if rep1_response.status_code != 200:
+            pytest.skip("Could not login as handlowiec@test.com")
+        
+        rep1_token = rep1_response.json()["access_token"]
+        
+        # Get leads assigned to handlowiec@test.com
+        leads_response = api_client.get(
+            f"{BASE_URL}/api/leads",
+            headers={"Authorization": f"Bearer {rep1_token}"}
+        )
+        rep1_leads = leads_response.json()
+        
+        if len(rep1_leads) == 0:
+            pytest.skip("handlowiec@test.com has no leads")
+        
+        lead_id = rep1_leads[0]["id"]
+        
+        # Now login as anna@test.com (different handlowiec)
+        anna_response = api_client.post(
+            f"{BASE_URL}/api/auth/login",
+            json={"email": "anna@test.com", "password": "test1234"}
+        )
+        
+        if anna_response.status_code != 200:
+            pytest.skip("Could not login as anna@test.com")
+        
+        anna_token = anna_response.json()["access_token"]
+        
+        # Try to upload document to handlowiec's lead as anna
+        small_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+        doc_data = {
+            "type": "photo",
+            "filename": "should-fail.png",
+            "mime": "image/png",
+            "data_base64": small_image_base64
+        }
+        
+        upload_response = api_client.post(
+            f"{BASE_URL}/api/leads/{lead_id}/documents",
+            json=doc_data,
+            headers={"Authorization": f"Bearer {anna_token}"}
+        )
+        assert upload_response.status_code == 403, f"Expected 403, got {upload_response.status_code}"
+
+    def test_upload_oversized_document_rejected(self, api_client, rep_token):
+        """POST /api/leads/{id}/documents with >12MB base64 returns 413 or 400"""
+        # Get a lead
+        leads_response = api_client.get(
+            f"{BASE_URL}/api/leads",
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        leads = leads_response.json()
+        
+        if len(leads) == 0:
+            pytest.skip("No leads available")
+        
+        lead_id = leads[0]["id"]
+        
+        # Create a large base64 string (>12MB when decoded, ~16MB base64)
+        # Base64 is ~1.33x larger than binary, so 12MB binary = ~16MB base64
+        # We'll create a 17MB base64 string to exceed the limit
+        large_data = "A" * (17 * 1024 * 1024)  # 17MB of 'A' characters
+        
+        doc_data = {
+            "type": "photo",
+            "filename": "huge-file.bin",
+            "mime": "application/octet-stream",
+            "data_base64": large_data
+        }
+        
+        upload_response = api_client.post(
+            f"{BASE_URL}/api/leads/{lead_id}/documents",
+            json=doc_data,
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        # Should return 413 (Payload Too Large) or 400 (Bad Request)
+        assert upload_response.status_code in [400, 413], f"Expected 400 or 413, got {upload_response.status_code}"
+
+
+# ============ REP LOCATION TESTS (Phase 1.2) ============
+class TestRepLocation:
+    """Rep live location endpoint tests (Phase 1.2)"""
+
+    def test_push_rep_location(self, api_client, rep_token):
+        """PUT /api/rep/location as handlowiec pushes location and returns 200"""
+        location_data = {
+            "latitude": 54.372,
+            "longitude": 18.638,
+            "accuracy": 10.0,
+            "battery": 0.8,
+            "battery_state": "unplugged"
+        }
+        
+        response = api_client.put(
+            f"{BASE_URL}/api/rep/location",
+            json=location_data,
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
+        
+        data = response.json()
+        assert data.get("ok") == True
+
+    def test_push_rep_location_upsert(self, api_client, rep_token):
+        """PUT /api/rep/location twice upserts (no duplicate)"""
+        location_data_1 = {
+            "latitude": 54.372,
+            "longitude": 18.638,
+            "battery": 0.8
+        }
+        
+        # First push
+        response1 = api_client.put(
+            f"{BASE_URL}/api/rep/location",
+            json=location_data_1,
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        assert response1.status_code == 200
+        
+        # Second push with different location
+        location_data_2 = {
+            "latitude": 54.380,
+            "longitude": 18.650,
+            "battery": 0.75
+        }
+        
+        response2 = api_client.put(
+            f"{BASE_URL}/api/rep/location",
+            json=location_data_2,
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        assert response2.status_code == 200
+        
+        # Verify only one location exists by checking manager dashboard
+        # Login as manager
+        manager_response = api_client.post(
+            f"{BASE_URL}/api/auth/login",
+            json={"email": "manager@test.com", "password": "test1234"}
+        )
+        
+        if manager_response.status_code != 200:
+            pytest.skip("Could not login as manager")
+        
+        manager_token = manager_response.json()["access_token"]
+        
+        dashboard_response = api_client.get(
+            f"{BASE_URL}/api/dashboard/manager",
+            headers={"Authorization": f"Bearer {manager_token}"}
+        )
+        
+        if dashboard_response.status_code == 200:
+            dashboard = dashboard_response.json()
+            # Get current user ID
+            me_response = api_client.get(
+                f"{BASE_URL}/api/auth/me",
+                headers={"Authorization": f"Bearer {rep_token}"}
+            )
+            user_id = me_response.json()["id"]
+            
+            # Find this rep in reps_live
+            rep_locations = [r for r in dashboard.get("reps_live", []) if r["user_id"] == user_id]
+            # Should have exactly 1 location (upserted, not duplicated)
+            assert len(rep_locations) <= 1, f"Expected 0 or 1 location, got {len(rep_locations)} (upsert should prevent duplicates)"
+
+    def test_delete_rep_location(self, api_client, rep_token):
+        """DELETE /api/rep/location clears location"""
+        # First push a location
+        location_data = {
+            "latitude": 54.372,
+            "longitude": 18.638,
+            "battery": 0.9
+        }
+        
+        push_response = api_client.put(
+            f"{BASE_URL}/api/rep/location",
+            json=location_data,
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        assert push_response.status_code == 200
+        
+        # Delete the location
+        delete_response = api_client.delete(
+            f"{BASE_URL}/api/rep/location",
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        assert delete_response.status_code == 200, f"Expected 200, got {delete_response.status_code}: {delete_response.text}"
+        
+        data = delete_response.json()
+        assert data.get("ok") == True
+
+    def test_manager_dashboard_returns_reps_live(self, api_client, manager_token, rep_token):
+        """GET /api/dashboard/manager returns reps_live array with pushed rep location"""
+        # First push a location as handlowiec
+        location_data = {
+            "latitude": 54.372,
+            "longitude": 18.638,
+            "battery": 0.85,
+            "accuracy": 15.0
+        }
+        
+        push_response = api_client.put(
+            f"{BASE_URL}/api/rep/location",
+            json=location_data,
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        assert push_response.status_code == 200
+        
+        # Get manager dashboard
+        dashboard_response = api_client.get(
+            f"{BASE_URL}/api/dashboard/manager",
+            headers={"Authorization": f"Bearer {manager_token}"}
+        )
+        assert dashboard_response.status_code == 200, f"Expected 200, got {dashboard_response.status_code}: {dashboard_response.text}"
+        
+        dashboard = dashboard_response.json()
+        assert "reps_live" in dashboard, "Missing reps_live in dashboard response"
+        assert isinstance(dashboard["reps_live"], list)
+        
+        # Get current rep user ID
+        me_response = api_client.get(
+            f"{BASE_URL}/api/auth/me",
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        user_id = me_response.json()["id"]
+        
+        # Find this rep in reps_live
+        rep_location = next((r for r in dashboard["reps_live"] if r["user_id"] == user_id), None)
+        assert rep_location is not None, f"Rep {user_id} not found in reps_live array"
+        
+        # Verify structure
+        assert "user_id" in rep_location
+        assert "name" in rep_location
+        assert "lat" in rep_location
+        assert "lng" in rep_location
+        assert "battery" in rep_location
+        assert "active" in rep_location
+        assert "last_seen_seconds" in rep_location
+        
+        # Verify values
+        assert rep_location["lat"] == location_data["latitude"]
+        assert rep_location["lng"] == location_data["longitude"]
+        assert rep_location["battery"] == location_data["battery"]
+
+    def test_manager_dashboard_as_handlowiec_forbidden(self, api_client, rep_token):
+        """GET /api/dashboard/manager as handlowiec returns 403 (Phase 1.2 regression)"""
+        response = api_client.get(
+            f"{BASE_URL}/api/dashboard/manager",
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        assert response.status_code == 403, f"Expected 403, got {response.status_code}"

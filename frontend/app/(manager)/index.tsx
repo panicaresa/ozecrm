@@ -27,6 +27,7 @@ interface Dashboard {
   rep_progress: any[];
   top3: any[];
   pins: any[];
+  reps_live: any[];
   total_leads: number;
 }
 
@@ -40,6 +41,8 @@ export default function ManagerDashboard() {
   const [err, setErr] = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
   const [selectedPinId, setSelectedPinId] = useState<string | null>(null);
+  const [selectedRepId, setSelectedRepId] = useState<string | null>(null);
+  const [layers, setLayers] = useState({ leads: true, reps: true });
 
   const load = useCallback(async () => {
     setErr(null);
@@ -60,6 +63,8 @@ export default function ManagerDashboard() {
 
   useEffect(() => {
     load();
+    const interval = setInterval(load, 30000); // refresh dashboard every 30s (live reps)
+    return () => clearInterval(interval);
   }, [load]);
 
   const onRefresh = () => {
@@ -79,7 +84,7 @@ export default function ManagerDashboard() {
   }, [leads, filterStatus, selectedPinId]);
 
   const drilldownTitle = selectedPinId
-    ? "Wybrana pinezka"
+    ? "Wybrany lead"
     : filterStatus
     ? `Status: ${statusLabel[filterStatus]}`
     : "";
@@ -180,19 +185,51 @@ export default function ManagerDashboard() {
 
         <View style={[styles.sectionCard, { padding: 0, overflow: "hidden" }]}>
           <View style={[styles.sectionHead, { padding: spacing.md }]}>
-            <Text style={styles.sectionTitle}>Lead Map</Text>
-            <Text style={styles.sectionSub}>{(data?.pins || []).length} z lokalizacją</Text>
+            <Text style={styles.sectionTitle}>Lead Map · Live</Text>
+            <Text style={styles.sectionSub}>
+              {(data?.pins || []).length} leadów · {(data?.reps_live || []).length} handlowców
+            </Text>
           </View>
           <LeadMap
             pins={data?.pins || []}
+            reps={data?.reps_live || []}
+            layers={layers}
+            onToggleLayer={(k) => setLayers((l) => ({ ...l, [k]: !l[k] }))}
             selectedId={selectedPinId}
+            selectedRepId={selectedRepId}
             onSelectPin={(id) => {
               setSelectedPinId(id);
+              setFilterStatus(null);
+              setSelectedRepId(null);
+            }}
+            onSelectRep={(id) => {
+              setSelectedRepId(id);
+              setSelectedPinId(null);
               setFilterStatus(null);
             }}
             testID="lead-map"
           />
         </View>
+
+        {/* Selected rep callout on web */}
+        {selectedRepId && (() => {
+          const r = (data?.reps_live || []).find((x: any) => x.user_id === selectedRepId);
+          if (!r) return null;
+          return (
+            <View style={styles.sectionCard} testID="rep-callout">
+              <View style={styles.sectionHead}>
+                <Text style={styles.sectionTitle}>{r.name}</Text>
+                <TouchableOpacity onPress={() => setSelectedRepId(null)}>
+                  <Feather name="x" size={18} color={colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
+              <Text style={{ color: colors.textSecondary, fontSize: 13 }}>
+                {r.active ? "Aktywny w terenie" : "Offline"} · ostatnia pozycja {r.lat?.toFixed?.(4)}, {r.lng?.toFixed?.(4)}
+                {typeof r.battery === "number" ? ` · 🔋 ${Math.round(r.battery * 100)}%` : ""}
+              </Text>
+            </View>
+          );
+        })()}
 
         {/* Drill-down list */}
         {drilldownLeads.length > 0 && (
@@ -209,7 +246,13 @@ export default function ManagerDashboard() {
             {drilldownLeads.map((l) => {
               const c = statusColor[l.status] || colors.primary;
               return (
-                <View key={l.id} style={styles.drillRow}>
+                <TouchableOpacity
+                  key={l.id}
+                  style={styles.drillRow}
+                  activeOpacity={0.7}
+                  onPress={() => router.push(`/(manager)/lead/${l.id}` as any)}
+                  testID={`drilldown-lead-${l.id}`}
+                >
                   <View style={[styles.drillDot, { backgroundColor: c }]} />
                   <View style={{ flex: 1 }}>
                     <Text style={styles.drillName}>{l.client_name}</Text>
@@ -218,7 +261,8 @@ export default function ManagerDashboard() {
                     </Text>
                   </View>
                   <Text style={[styles.drillStatus, { color: c }]}>{statusLabel[l.status] || l.status}</Text>
-                </View>
+                  <Feather name="chevron-right" size={16} color={colors.textSecondary} />
+                </TouchableOpacity>
               );
             })}
           </View>

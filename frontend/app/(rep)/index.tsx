@@ -1,8 +1,10 @@
-import React, { useEffect, useState, useCallback } from "react";
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from "react-native";
+import React, { useEffect, useState, useCallback, useRef } from "react";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert, Platform } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import * as Location from "expo-location";
+import * as Battery from "expo-battery";
 import { colors, radius, spacing } from "../../src/theme";
 import { useAuth } from "../../src/lib/auth";
 import { api, formatApiError } from "../../src/lib/api";
@@ -24,6 +26,66 @@ export default function RepHome() {
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false); // Start/Stop mode
   const [err, setErr] = useState<string | null>(null);
+  const locationRef = useRef<{ stop?: () => void } | null>(null);
+  const intervalRef = useRef<any>(null);
+
+  const pushLocation = useCallback(async () => {
+    try {
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      let battery: number | null = null;
+      let batteryState: string | undefined;
+      try {
+        battery = await Battery.getBatteryLevelAsync();
+        const st = await Battery.getBatteryStateAsync();
+        batteryState = ["unknown", "unplugged", "charging", "full"][st ?? 0];
+      } catch { /* web or unsupported */ }
+      await api.put("/rep/location", {
+        latitude: loc.coords.latitude,
+        longitude: loc.coords.longitude,
+        accuracy: loc.coords.accuracy ?? null,
+        battery,
+        battery_state: batteryState,
+      });
+    } catch (e) {
+      // swallow: field may have no GPS signal yet
+      console.warn("Location push failed", (e as any)?.message);
+    }
+  }, []);
+
+  const startWorkMode = useCallback(async () => {
+    const perm = await Location.requestForegroundPermissionsAsync();
+    if (perm.status !== "granted") {
+      Alert.alert(
+        "Brak uprawnień",
+        "Aby uruchomić tryb pracy, pozwól aplikacji na dostęp do lokalizacji."
+      );
+      return;
+    }
+    setWorking(true);
+    await pushLocation();
+    intervalRef.current = setInterval(pushLocation, 30000); // every 30s
+  }, [pushLocation]);
+
+  const stopWorkMode = useCallback(async () => {
+    setWorking(false);
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+    try {
+      await api.delete("/rep/location");
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const toggleWork = () => (working ? stopWorkMode() : startWorkMode());
+
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, []);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -68,7 +130,7 @@ export default function RepHome() {
           <TouchableOpacity
             style={[styles.workBtn, { backgroundColor: working ? colors.error : colors.secondary }]}
             activeOpacity={0.85}
-            onPress={() => setWorking((w) => !w)}
+            onPress={toggleWork}
             testID="toggle-work-mode-button"
           >
             <Feather name={working ? "square" : "play"} size={28} color="#fff" />
@@ -76,7 +138,7 @@ export default function RepHome() {
           </TouchableOpacity>
           <Text style={styles.workHint}>
             {working
-              ? "Tryb pracy aktywny · (śledzenie GPS w tle będzie dostępne w v2.0)"
+              ? "Tryb pracy aktywny · pozycja GPS wysyłana co 30 s"
               : "Uruchom tryb pracy, aby rozpocząć dzień w terenie"}
           </Text>
         </View>

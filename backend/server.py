@@ -109,6 +109,8 @@ def require_roles(*roles: str):
 
 ROLES = ("admin", "manager", "handlowiec")
 LEAD_STATUSES = ("umowione", "decyzja", "podpisana", "nie_zainteresowany", "nowy")
+DOC_TYPES = ("umowa", "photo", "other")
+MAX_DOC_BYTES = 12 * 1024 * 1024  # ~12MB cap on base64 payload
 
 
 class LoginIn(BaseModel):
@@ -182,6 +184,21 @@ class GoalIn(BaseModel):
     user_id: str
     target: int
     period: str = "monthly"
+
+
+class DocumentIn(BaseModel):
+    type: str = "photo"  # umowa | photo | other
+    filename: Optional[str] = None
+    mime: Optional[str] = "image/jpeg"
+    data_base64: str  # may include data: prefix
+
+
+class RepLocationIn(BaseModel):
+    latitude: float
+    longitude: float
+    accuracy: Optional[float] = None
+    battery: Optional[float] = None  # 0..1
+    battery_state: Optional[str] = None  # charging|unplugged|full|unknown
 
 
 @api.post("/auth/login")
@@ -337,6 +354,117 @@ async def delete_lead(lead_id: str, user: Dict[str, Any] = Depends(require_roles
     return {"ok": True}
 
 
+async def _ensure_lead_access(lead_id: str, user: Dict[str, Any]) -> Dict[str, Any]:
+    lead = await db.leads.find_one({"id": lead_id}, {"_id": 0})
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if user["role"] == "admin":
+        return lead
+    if user["role"] == "handlowiec":
+        if lead.get("assigned_to") != user["id"]:
+            raise HTTPException(status_code=403, detail="Not your lead")
+        return lead
+    # manager
+    reps = await db.users.find({"manager_id": user["id"]}, {"id": 1, "_id": 0}).to_list(500)
+    rep_ids = {r["id"] for r in reps} | {user["id"]}
+    if lead.get("owner_manager_id") != user["id"] and lead.get("assigned_to") not in rep_ids:
+        raise HTTPException(status_code=403, detail="Not your team's lead")
+    return lead
+
+
+@api.post("/leads/{lead_id}/documents")
+async def add_document(lead_id: str, body: DocumentIn, user: Dict[str, Any] = Depends(get_current_user)):
+    await _ensure_lead_access(lead_id, user)
+    if body.type not in DOC_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid document type")
+    data = body.data_base64 or ""
+    # quick size check on raw base64 string
+    if len(data) > int(MAX_DOC_BYTES * 1.4):
+        raise HTTPException(status_code=413, detail="Dokument jest zbyt duży (>12MB)")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "type": body.type,
+        "filename": body.filename or f"{body.type}-{int(datetime.now(timezone.utc).timestamp())}",
+        "mime": body.mime or "image/jpeg",
+        "data_base64": data,
+        "uploaded_by": user["id"],
+        "uploaded_at": now(),
+    }
+    await db.leads.update_one(
+        {"id": lead_id},
+        {"$push": {"documents": doc}, "$set": {"updated_at": now()}},
+    )
+    # Return without data_base64 to keep response small
+    return {"id": doc["id"], "type": doc["type"], "filename": doc["filename"], "mime": doc["mime"], "uploaded_at": iso(doc["uploaded_at"])}
+
+
+@api.get("/leads/{lead_id}/documents")
+async def list_documents(lead_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    lead = await _ensure_lead_access(lead_id, user)
+    docs = lead.get("documents", []) or []
+    # Return light metadata list
+    return [
+        {
+            "id": d["id"],
+            "type": d["type"],
+            "filename": d.get("filename"),
+            "mime": d.get("mime"),
+            "uploaded_by": d.get("uploaded_by"),
+            "uploaded_at": iso(d.get("uploaded_at")),
+        }
+        for d in docs
+    ]
+
+
+@api.get("/leads/{lead_id}/documents/{doc_id}")
+async def get_document(lead_id: str, doc_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    lead = await _ensure_lead_access(lead_id, user)
+    for d in lead.get("documents", []) or []:
+        if d["id"] == doc_id:
+            return {
+                "id": d["id"],
+                "type": d["type"],
+                "filename": d.get("filename"),
+                "mime": d.get("mime"),
+                "data_base64": d.get("data_base64"),
+                "uploaded_at": iso(d.get("uploaded_at")),
+            }
+    raise HTTPException(status_code=404, detail="Document not found")
+
+
+@api.delete("/leads/{lead_id}/documents/{doc_id}")
+async def delete_document(lead_id: str, doc_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    await _ensure_lead_access(lead_id, user)
+    res = await db.leads.update_one({"id": lead_id}, {"$pull": {"documents": {"id": doc_id}}, "$set": {"updated_at": now()}})
+    if res.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return {"ok": True}
+
+
+# --------------------------------------------------------------------------------------
+# Rep live location
+# --------------------------------------------------------------------------------------
+@api.put("/rep/location")
+async def push_rep_location(body: RepLocationIn, user: Dict[str, Any] = Depends(require_roles("handlowiec", "manager", "admin"))):
+    doc = {
+        "user_id": user["id"],
+        "latitude": body.latitude,
+        "longitude": body.longitude,
+        "accuracy": body.accuracy,
+        "battery": body.battery,
+        "battery_state": body.battery_state,
+        "updated_at": now(),
+    }
+    await db.rep_locations.update_one({"user_id": user["id"]}, {"$set": doc}, upsert=True)
+    return {"ok": True}
+
+
+@api.delete("/rep/location")
+async def stop_rep_tracking(user: Dict[str, Any] = Depends(require_roles("handlowiec", "manager", "admin"))):
+    await db.rep_locations.delete_one({"user_id": user["id"]})
+    return {"ok": True}
+
+
 DEFAULT_RRSO = [
     {"label": "Alior", "value": 8.85},
     {"label": "Santander", "value": 10.75},
@@ -451,12 +579,47 @@ async def manager_dashboard(user: Dict[str, Any] = Depends(require_roles("manage
         if l.get("latitude") is not None and l.get("longitude") is not None
     ]
 
+    # Live rep positions
+    reps_live_raw = await db.rep_locations.find({"user_id": {"$in": rep_ids}}, {"_id": 0}).to_list(500)
+    rep_by_id = {r["id"]: r for r in reps}
+    now_ts = now()
+    reps_live = []
+    for rl in reps_live_raw:
+        u = rep_by_id.get(rl["user_id"])
+        if not u:
+            continue
+        ts = rl.get("updated_at")
+        last_seen_s = None
+        active = True
+        if isinstance(ts, datetime):
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            delta = (now_ts - ts).total_seconds()
+            last_seen_s = int(delta)
+            active = delta < 30 * 60
+        reps_live.append(
+            {
+                "user_id": u["id"],
+                "name": u.get("name") or u["email"],
+                "avatar_url": u.get("avatar_url"),
+                "lat": rl["latitude"],
+                "lng": rl["longitude"],
+                "battery": rl.get("battery"),
+                "battery_state": rl.get("battery_state"),
+                "accuracy": rl.get("accuracy"),
+                "last_seen_seconds": last_seen_s,
+                "active": active,
+                "updated_at": iso(ts),
+            }
+        )
+
     return {
-        "kpi": {"meetings": meetings, "new_leads": new_leads, "quotes": quotes, "active_reps": active_reps},
+        "kpi": {"meetings": meetings, "new_leads": new_leads, "quotes": quotes, "active_reps": sum(1 for r in reps_live if r["active"]) or len(reps)},
         "status_breakdown": buckets,
         "rep_progress": rep_progress,
         "top3": top3,
         "pins": pins,
+        "reps_live": reps_live,
         "total_leads": len(leads),
     }
 
@@ -484,6 +647,7 @@ async def seed_data():
     await db.leads.create_index("owner_manager_id")
     await db.settings.create_index("id", unique=True)
     await db.goals.create_index([("user_id", 1), ("period", 1)], unique=True)
+    await db.rep_locations.create_index("user_id", unique=True)
 
     existing_settings = await db.settings.find_one({"id": "global"})
     if not existing_settings:
