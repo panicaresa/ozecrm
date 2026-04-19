@@ -1,0 +1,174 @@
+{
+  "theme_archetype": "Hybrid: Archetype 4 (Swiss & High-Contrast) + Archetype 2 (Performance Pro)",
+  "vibe": "Professional, premium, energetic, high-contrast command center (cockpit feel for managers, ultra-legible outdoor tool for reps)",
+  "colors": {
+    "background": {
+      "default": "#F4F4F5",
+      "paper": "#FFFFFF",
+      "inverted": "#09090B"
+    },
+    "primary": {
+      "default": "#FF4D00",
+      "text": "#FFFFFF",
+      "hover": "#E64500"
+    },
+    "secondary": {
+      "default": "#0055FF",
+      "text": "#FFFFFF",
+      "hover": "#004CE6"
+    },
+    "status": {
+      "success": "#10B981",
+      "warning": "#F59E0B",
+      "error": "#EF4444",
+      "info": "#3B82F6"
+    },
+    "chart": {
+      "podpisana": "#FF4D00",
+      "decyzja": "#0055FF",
+      "umowione": "#F59E0B",
+      "nie_zainteresowany": "#71717A"
+    },
+    "text": {
+      "primary": "#09090B",
+      "secondary": "#71717A",
+      "inverse": "#FFFFFF",
+      "inverse_secondary": "#A1A1AA"
+    },
+    "border": {
+      "default": "#E4E4E7",
+      "dark": "#27272A"
+    }
+  },
+  "typography": {
+    "font_family": {
+      "heading": "Outfit",
+      "body": "Manrope",
+      "mono": "JetBrains Mono"
+    },
+    "sizes": {
+      "h1": "32px",
+      "h2": "24px",
+      "h3": "20px",
+      "body_lg": "18px",
+      "body": "16px",
+      "body_sm": "14px",
+      "caption": "12px"
+    },
+    "weights": {
+      "regular": "400",
+      "medium": "500",
+      "bold": "700",
+      "black": "900"
+    },
+    "line_heights": {
+      "heading": "1.2",
+      "body": "1.5"
+    }
+  },
+  "spacing": {
+    "xs": "4px",
+    "sm": "8px",
+    "md": "16px",
+    "lg": "24px",
+    "xl": "32px",
+    "xxl": "48px",
+    "container_padding": "16px",
+    "tap_target_min_height": "56px"
+  },
+  "components": {
+    "buttons": {
+      "primary": "Background primary, radius 8px, height 56px, centered flex, bold text, shadow.",
+      "secondary": "Background secondary, radius 8px, height 56px, centered flex, bold text.",
+      "outline": "Border 2px primary, transparent bg, radius 8px, height 56px, centered flex, primary text bold.",
+      "start_stop_work": "Massive 80px circular or full-width button. Start mode is Cobalt (#0055FF), Stop mode is Red (#EF4444). Prominent drop shadow."
+    },
+    "kpi_tile": {
+      "wrapper": "Background inverted (#09090B), radius 12px, padding 16px, flex column, border border-dark.",
+      "value_text": "Text inverse, 32px, black weight, tight tracking.",
+      "label_text": "Text inverse_secondary, 14px, medium weight.",
+      "icon_color": "#FF4D00"
+    },
+    "progress_bar": {
+      "track": "Height 12px, background zinc-200, rounded full, full width.",
+      "fill": "Height 12px, background primary, rounded full.",
+      "layout": "Row: Avatar (40x40) -> Text Stack (flex-1) -> Percentage text -> Progress bar underneath."
+    },
+    "map_pin": {
+      "default": "Dark inverted pill with white text and orange dot indicator. Sharp, minimal.",
+      "cluster": "Circular badge (#0055FF) with white count text and subtle drop shadow."
+    },
+    "form_input": {
+      "wrapper": "Flex column, gap 8px, margin bottom 16px.",
+      "label": "Text 14px, bold, primary-text.",
+      "input": "Height 56px, border zinc-300, radius 8px, padding 16px, background white. On focus: border primary 2px."
+    },
+    "chart_legend": {
+      "wrapper": "Flex wrap, gap 16px, margin top 16px.",
+      "item": "Flex row, items center, gap 8px.",
+      "dot": "Width 12px, height 12px, rounded full."
+    },
+    "lead_card": {
+      "wrapper": "Background white, padding 16px, radius 12px, shadow small, border zinc-100, flex column gap 8px.",
+      "header": "Flex row, justify space-between, items start.",
+      "status_badge": "Padding horizontal 8px, padding vertical 4px, radius 4px, text 12px, bold, uppercase."
+    },
+    "offer_builder_step": {
+      "wrapper": "Flex-1, background default, padding 16px.",
+      "totals_footer": "Background white, padding 16px, border top zinc-200, positioned at bottom/sticky.",
+      "pdf_button": "Full width, background primary, height 56px, radius 8px, text white, bold, 18px."
+    }
+  },
+  "screens": {
+    "Login": {
+      "layout": "Centered logo, full height form taking up bottom half of screen. Solid background with minimal aesthetic.",
+      "elements": "Email, Password inputs, Login CTA."
+    },
+    "Manager_Dashboard": {
+      "vibe": "Command Center / Cockpit. Dense but highly scannable.",
+      "header": "Dark inverted header with greeting and date.",
+      "layout": "Top row: 2x2 grid of KPI tiles (dark). Section 2: Cele i postęp (white cards). Section 3: Statusy leadów (donut chart). Section 4: Map (height 300px, embedded). Section 5: Top 3 Handlowców ranking (list layout)."
+    },
+    "Handlowiec_Home": {
+      "vibe": "Action-oriented, clear outdoors, extremely high contrast.",
+      "layout": "Header: Massive Start/Stop Work toggle. Main CTA: Huge 'Dodaj leada' primary button. Secondary: 'Generator ofert OZE' button. Bottom section: 'Moje wyniki' summary card."
+    },
+    "Add_Lead": {
+      "layout": "Scrollable form. Top: Camera trigger (big dashed box or button). Middle: Client details, auto-geotag read-only field. Bottom: Sticky save button."
+    },
+    "Offer_Generator": {
+      "layout": "Multi-step wizard. Step indicator at top. Inputs for building parameters, slider/inputs for margin/discount. Bottom sticky footer with live 'Rata miesięczna' and 'Generuj PDF' button."
+    },
+    "Admin_Settings": {
+      "layout": "List layout. Sections for Tariffs, RRSO rates, Postal Codes. Standard iOS/Android settings list items."
+    }
+  },
+  "media_urls": {
+    "avatars": [
+      "https://images.unsplash.com/photo-1758518727888-ffa196002e59?w=400&q=85",
+      "https://images.unsplash.com/photo-1655249493799-9cee4fe983bb?w=400&q=85",
+      "https://images.unsplash.com/photo-1655249481446-25d575f1c054?w=400&q=85"
+    ]
+  },
+  "icons": {
+    "provider": "@expo/vector-icons",
+    "family": "Feather or Ionicons (clean, stroke-based. Do not mix families arbitrarily)."
+  },
+  "motion": {
+    "screen_transition": "Standard React Navigation slide from right.",
+    "button_press": "Scale down to 0.95, opacity 0.8 on active opacity.",
+    "progress_bar": "Animated width expansion on mount."
+  },
+  "accessibility": {
+    "contrast": "Ensure all text on primary/secondary buttons is white. Test in sunlight.",
+    "touch_targets": "Minimum 48x48px, preferred 56x56px for all tappable elements."
+  },
+  "instructions_to_main_agent": [
+    "Use @expo-google-fonts for Outfit (Headings) and Manrope (Body) if integrating custom fonts.",
+    "Ensure all interactive elements have testID attributes in kebab-case (e.g., data-testid='login-button' or testID='login-button').",
+    "For the Manager Dashboard KPI tiles, strictly use the inverted dark color scheme (#09090B) to differentiate it as the 'Command Center'.",
+    "Offer Generator must have a fixed/sticky bottom container for the live totals to ensure they are always visible while scrolling through form inputs.",
+    "Use react-native-maps for the Lead Map with clustered markers if possible (using a wrapper library like react-native-map-clustering).",
+    "DO NOT use raw HTML components, this is React Native. Map the provided styling to StyleSheet or NativeWind classes as requested in your implementation."
+  ]
+}
