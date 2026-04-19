@@ -16,57 +16,81 @@ type BuildingType = "mieszkalny" | "gospodarczy";
 
 interface Props {
   testID?: string;
-  /** allow rendering in a compact single-column variant (useful for narrow dashboards). */
   compact?: boolean;
 }
 
 interface Settings {
   commission_percent?: number;
   margin_per_m2?: number;
+  base_price_low?: number;
+  base_price_high?: number;
 }
 
 interface Result {
   area: number;
+  basePricePerM2: number;
+  baseNetto: number;
   marginNetto: number;
+  marginAutoDefault: number;
+  totalNetto: number;
   vatAmount: number;
   vatLabel: "8%" | "23%" | "Mieszany";
-  marginBrutto: number;
+  totalBrutto: number;
   commission: number;
   commissionPercent: number;
   marginPerM2: number;
 }
 
-function computeCommission(area: number, type: BuildingType, commissionPercent: number, marginPerM2: number): Result {
+function computeAll(
+  area: number,
+  type: BuildingType,
+  marginNettoOverride: number | null,
+  cfg: { commissionPercent: number; marginPerM2: number; basePriceLow: number; basePriceHigh: number }
+): Result {
   const safeArea = isFinite(area) && area > 0 ? area : 0;
-  const marginNetto = Math.round(safeArea * marginPerM2 * 100) / 100;
+  const basePricePerM2 = safeArea <= 200 ? cfg.basePriceLow : cfg.basePriceHigh;
+  const baseNetto = Math.round(safeArea * basePricePerM2 * 100) / 100;
+
+  const marginAutoDefault = Math.round(safeArea * cfg.marginPerM2 * 100) / 100;
+  const marginNetto =
+    marginNettoOverride != null && isFinite(marginNettoOverride) && marginNettoOverride >= 0
+      ? Math.round(marginNettoOverride * 100) / 100
+      : marginAutoDefault;
+
+  const totalNetto = Math.round((baseNetto + marginNetto) * 100) / 100;
 
   let vatAmount = 0;
   let vatLabel: Result["vatLabel"] = "23%";
   if (type === "gospodarczy") {
-    vatAmount = marginNetto * 0.23;
+    vatAmount = totalNetto * 0.23;
     vatLabel = "23%";
   } else if (safeArea <= 300 || safeArea <= 0) {
-    vatAmount = marginNetto * 0.08;
+    vatAmount = totalNetto * 0.08;
     vatLabel = "8%";
   } else {
     const f8 = 300 / safeArea;
     const f23 = (safeArea - 300) / safeArea;
-    vatAmount = marginNetto * f8 * 0.08 + marginNetto * f23 * 0.23;
+    vatAmount = totalNetto * f8 * 0.08 + totalNetto * f23 * 0.23;
     vatLabel = "Mieszany";
   }
   vatAmount = Math.round(vatAmount * 100) / 100;
 
-  const commission = Math.round(((commissionPercent / 100) * marginNetto) * 100) / 100;
+  const totalBrutto = Math.round((totalNetto + vatAmount) * 100) / 100;
+  const commission = Math.round(((cfg.commissionPercent / 100) * marginNetto) * 100) / 100;
 
   return {
     area: safeArea,
+    basePricePerM2,
+    baseNetto,
     marginNetto,
+    marginAutoDefault,
+    totalNetto,
     vatAmount,
     vatLabel,
-    marginBrutto: Math.round((marginNetto + vatAmount) * 100) / 100,
+    totalBrutto,
     commission,
-    commissionPercent,
-    marginPerM2,
+    commissionPercent: cfg.commissionPercent,
+    marginPerM2: cfg.marginPerM2,
   };
 }
 
@@ -78,6 +102,8 @@ export function CommissionCalculator({ testID, compact = false }: Props) {
 
   const [areaText, setAreaText] = useState("150");
   const [type, setType] = useState<BuildingType>("mieszkalny");
+  const [marginText, setMarginText] = useState<string>(""); // empty = use auto default
+  const [marginTouched, setMarginTouched] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -88,13 +114,14 @@ export function CommissionCalculator({ testID, compact = false }: Props) {
         setSettings({
           commission_percent:
             typeof res.data?.commission_percent === "number" ? res.data.commission_percent : 50,
-          margin_per_m2:
-            typeof res.data?.margin_per_m2 === "number" ? res.data.margin_per_m2 : 50,
+          margin_per_m2: typeof res.data?.margin_per_m2 === "number" ? res.data.margin_per_m2 : 50,
+          base_price_low: typeof res.data?.base_price_low === "number" ? res.data.base_price_low : 275,
+          base_price_high: typeof res.data?.base_price_high === "number" ? res.data.base_price_high : 200,
         });
       } catch (e) {
         if (!mounted) return;
         setErr(formatApiError(e));
-        setSettings({ commission_percent: 50, margin_per_m2: 50 });
+        setSettings({ commission_percent: 50, margin_per_m2: 50, base_price_low: 275, base_price_high: 200 });
       } finally {
         if (mounted) setLoading(false);
       }
@@ -109,11 +136,32 @@ export function CommissionCalculator({ testID, compact = false }: Props) {
     return isFinite(n) ? n : 0;
   }, [areaText]);
 
+  const marginOverride = useMemo(() => {
+    if (!marginTouched) return null;
+    const v = parseFloat((marginText || "").replace(",", "."));
+    return isFinite(v) && v >= 0 ? v : null;
+  }, [marginText, marginTouched]);
+
   const result = useMemo(() => {
-    const cp = settings?.commission_percent ?? 50;
-    const mpm = settings?.margin_per_m2 ?? 50;
-    return computeCommission(area, type, cp, mpm);
-  }, [area, type, settings]);
+    return computeAll(area, type, marginOverride, {
+      commissionPercent: settings?.commission_percent ?? 50,
+      marginPerM2: settings?.margin_per_m2 ?? 50,
+      basePriceLow: settings?.base_price_low ?? 275,
+      basePriceHigh: settings?.base_price_high ?? 200,
+    });
+  }, [area, type, marginOverride, settings]);
+
+  // Keep the margin input synced with auto-default when user hasn't overridden
+  useEffect(() => {
+    if (!marginTouched) {
+      setMarginText(String(result.marginAutoDefault.toFixed(0)));
+    }
+  }, [result.marginAutoDefault, marginTouched]);
+
+  const resetMargin = () => {
+    setMarginTouched(false);
+    setMarginText(String(result.marginAutoDefault.toFixed(0)));
+  };
 
   const vatTone =
     result.vatLabel === "8%"
@@ -138,7 +186,7 @@ export function CommissionCalculator({ testID, compact = false }: Props) {
           <Text style={styles.subtitle}>
             {loading
               ? "ładowanie..."
-              : `${result.commissionPercent}% marży · ${fmtPln(result.marginPerM2)}/m²`}
+              : `${result.commissionPercent}% marży · baza ${fmtPln(result.basePricePerM2)}/m²`}
           </Text>
         </View>
         <Feather name={expanded ? "chevron-up" : "chevron-down"} size={18} color={colors.textSecondary} />
@@ -211,11 +259,56 @@ export function CommissionCalculator({ testID, compact = false }: Props) {
                 </View>
               </View>
 
-              {/* Breakdown */}
+              {/* Editable margin */}
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 12 }}>
+                <Text style={[styles.label, { marginTop: 0, marginBottom: 0 }]}>Całkowita marża (PLN)</Text>
+                {marginTouched && (
+                  <TouchableOpacity onPress={resetMargin} testID="commission-margin-reset" style={styles.resetBtn}>
+                    <Feather name="rotate-ccw" size={11} color={colors.primary} />
+                    <Text style={styles.resetText}>AUTO</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+              <View style={styles.marginInputWrap}>
+                <TextInput
+                  style={styles.areaInput}
+                  value={marginText}
+                  onChangeText={(v) => {
+                    setMarginText(v);
+                    setMarginTouched(true);
+                  }}
+                  keyboardType="decimal-pad"
+                  placeholder={String(result.marginAutoDefault.toFixed(0))}
+                  placeholderTextColor={colors.textSecondary}
+                  testID="commission-margin-input"
+                />
+                <Text style={styles.areaUnit}>PLN</Text>
+              </View>
+              <Text style={styles.hint}>
+                Auto: {result.area} m² × {fmtPln(result.marginPerM2)}/m² ={" "}
+                <Text style={{ fontWeight: "800" }}>{fmtPln(result.marginAutoDefault)}</Text>
+              </Text>
+
+              {/* Full breakdown */}
               <View style={[styles.breakdown, compact && { paddingHorizontal: 10 }]}>
                 <View style={styles.breakRow}>
-                  <Text style={styles.breakLabel}>Marża netto ({fmtPln(result.marginPerM2)}/m² × {result.area} m²)</Text>
-                  <Text style={styles.breakValue}>{fmtPln(result.marginNetto)}</Text>
+                  <Text style={styles.breakLabel}>
+                    Cena bazowa netto ({fmtPln(result.basePricePerM2)}/m² × {result.area} m²)
+                  </Text>
+                  <Text style={styles.breakValue}>{fmtPln(result.baseNetto)}</Text>
+                </View>
+                <View style={styles.breakRow}>
+                  <Text style={styles.breakLabel}>+ Marża{marginTouched ? " (ręczna)" : ""}</Text>
+                  <Text style={[styles.breakValue, { color: colors.secondary }]}>
+                    + {fmtPln(result.marginNetto)}
+                  </Text>
+                </View>
+                <View style={styles.divider} />
+                <View style={styles.breakRow}>
+                  <Text style={[styles.breakLabel, { fontWeight: "800", color: colors.textPrimary }]}>
+                    Cena netto
+                  </Text>
+                  <Text style={[styles.breakValue, { fontSize: 14 }]}>{fmtPln(result.totalNetto)}</Text>
                 </View>
                 <View style={styles.breakRow}>
                   <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -226,11 +319,16 @@ export function CommissionCalculator({ testID, compact = false }: Props) {
                       </Text>
                     </View>
                   </View>
-                  <Text style={styles.breakValueMuted}>{fmtPln(result.vatAmount)}</Text>
+                  <Text style={styles.breakValueMuted}>+ {fmtPln(result.vatAmount)}</Text>
                 </View>
+                <View style={styles.divider} />
                 <View style={styles.breakRow}>
-                  <Text style={styles.breakLabel}>Marża brutto</Text>
-                  <Text style={styles.breakValue}>{fmtPln(result.marginBrutto)}</Text>
+                  <Text style={[styles.breakLabel, { fontWeight: "900", color: colors.inverted, fontSize: 13 }]}>
+                    Cena brutto
+                  </Text>
+                  <Text style={[styles.breakValue, { fontSize: 16, color: colors.inverted }]} testID="commission-brutto">
+                    {fmtPln(result.totalBrutto)}
+                  </Text>
                 </View>
               </View>
 
@@ -239,7 +337,7 @@ export function CommissionCalculator({ testID, compact = false }: Props) {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.commissionCap}>Prowizja handlowca</Text>
                   <Text style={styles.commissionHint}>
-                    {result.commissionPercent}% × marża netto
+                    {result.commissionPercent}% × {fmtPln(result.marginNetto)}
                   </Text>
                 </View>
                 <Text style={styles.commissionAmount} testID="commission-amount">
@@ -277,12 +375,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  title: {
-    fontSize: 15,
-    fontWeight: "900",
-    color: colors.textPrimary,
-    letterSpacing: -0.2,
-  },
+  title: { fontSize: 15, fontWeight: "900", color: colors.textPrimary, letterSpacing: -0.2 },
   subtitle: { fontSize: 11, color: colors.textSecondary, marginTop: 1 },
   body: { padding: spacing.md, paddingTop: 0, borderTopWidth: 1, borderTopColor: colors.zinc100 },
   label: {
@@ -294,6 +387,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
     marginBottom: 6,
   },
+  hint: { fontSize: 11, color: colors.textSecondary, marginTop: 4, lineHeight: 14 },
   segRow: { flexDirection: "row", gap: 8 },
   seg: {
     flex: 1,
@@ -320,6 +414,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     backgroundColor: colors.bg,
   },
+  marginInputWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1.5,
+    borderColor: colors.secondary,
+    borderRadius: radius.md,
+    paddingHorizontal: 12,
+    backgroundColor: "#F0FDF4",
+  },
   areaInput: {
     flex: 1,
     paddingVertical: 12,
@@ -339,6 +442,16 @@ const styles = StyleSheet.create({
   },
   chipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
   chipText: { fontSize: 12, fontWeight: "800", color: colors.textPrimary },
+  resetBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: `${colors.primary}15`,
+  },
+  resetText: { fontSize: 9, fontWeight: "900", color: colors.primary, letterSpacing: 1 },
   breakdown: {
     backgroundColor: colors.bg,
     borderRadius: radius.md,
@@ -346,15 +459,12 @@ const styles = StyleSheet.create({
     marginTop: 12,
     gap: 6,
   },
+  divider: { height: 1, backgroundColor: colors.border, marginVertical: 4 },
   breakRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   breakLabel: { flex: 1, fontSize: 12, color: colors.textSecondary },
   breakValue: { fontSize: 13, fontWeight: "800", color: colors.textPrimary, fontVariant: ["tabular-nums"] },
   breakValueMuted: { fontSize: 12, fontWeight: "700", color: colors.textSecondary, fontVariant: ["tabular-nums"] },
-  vatBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 999,
-  },
+  vatBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 999 },
   commissionCard: {
     marginTop: 12,
     flexDirection: "row",

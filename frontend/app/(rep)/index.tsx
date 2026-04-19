@@ -176,6 +176,14 @@ export default function RepHome() {
             style={{ marginTop: 10 }}
           />
           <Button
+            title="Moje zarobki · Finanse"
+            variant="secondary"
+            icon={<Feather name="dollar-sign" size={18} color="#fff" />}
+            onPress={() => router.push("/(rep)/finance")}
+            testID="rep-finance-button"
+            style={{ marginTop: 10 }}
+          />
+          <Button
             title="Moje leady"
             variant="outline"
             icon={<Feather name="list" size={18} color={colors.primary} />}

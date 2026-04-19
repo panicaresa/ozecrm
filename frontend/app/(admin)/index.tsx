@@ -18,6 +18,7 @@ export default function AdminHome() {
   };
 
   const tiles = [
+    { title: "Finanse firmy", icon: "dollar-sign" as const, href: "/(admin)/finance", desc: "Obrót, marża, prowizje" },
     { title: "Ustawienia globalne", icon: "sliders" as const, href: "/(admin)/settings", desc: "Ceny bazowe, RRSO, kody" },
     { title: "Użytkownicy", icon: "users" as const, href: "/(admin)/users", desc: "Handlowcy i managerowie" },
     { title: "Centrum Dowodzenia", icon: "activity" as const, href: "/(manager)", desc: "Widok managera" },

@@ -308,6 +308,17 @@ export default function ManagerDashboard() {
 
         <TouchableOpacity
           style={styles.viewAllBtn}
+          onPress={() => router.push("/(manager)/finance")}
+          testID="manager-finance-button"
+          activeOpacity={0.8}
+        >
+          <Feather name="dollar-sign" size={16} color={colors.textInverse} />
+          <Text style={styles.viewAllText}>Finanse zespołu — zarobki</Text>
+          <Feather name="chevron-right" size={16} color={colors.textInverse} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.viewAllBtn, { backgroundColor: colors.inverted, marginTop: 10 }]}
           onPress={() => router.push("/(manager)/leads")}
           testID="view-all-leads-button"
           activeOpacity={0.8}

@@ -180,6 +180,78 @@ backend:
           - PUT /api/rep/location (handlowiec) → 200, and subsequent manager dashboard reps_live contains that user.
           All 26 test assertions pass. No regressions.
 
+  - task: "Finance dashboard endpoint /api/dashboard/finance"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          New endpoint GET /api/dashboard/finance. Role-scoped:
+            admin      → all signed leads
+            manager    → leads assigned to their reps (manager_id match) + owner_manager_id match
+            handlowiec → only assigned_to self
+          Response includes: period (current month), settings_snapshot, totals_month
+          {signed_count, commission_sum, margin_sum, netto_sum, brutto_sum, vat_sum},
+          totals_all_time, by_rep, contracts_month, contracts_all.
+          Formulas per lead (area=lead.building_area, type=lead.building_type):
+            base_rate = base_price_low if area<=200 else base_price_high
+            base_netto = area * base_rate
+            margin_netto = lead.margin_override (if set) OR area * margin_per_m2
+            total_netto = base_netto + margin_netto
+            VAT: gospodarczy=23%; mieszkalny ≤300m²=8%; mieszkalny >300m²=mixed 300/area*8%+rest*23%
+            total_brutto = total_netto + VAT
+            commission = commission_percent% × margin_netto
+          Requires auth (any role). Returns 401 unauthenticated.
+      - working: true
+        agent: "testing"
+        comment: |
+          Verified via /app/backend_test_finance.py — 29/29 assertions PASS.
+          AUTH:
+            - GET /api/dashboard/finance without Authorization → 401 ✅
+            - GET as admin / manager / handlowiec → 200 ✅
+          RESPONSE SHAPE:
+            - Top-level keys present: period, settings_snapshot, totals_month, totals_all_time,
+              by_rep, contracts_month, contracts_all ✅
+            - period has ISO month_start (2026-04-01T00:00:00+00:00) and month_end ✅
+            - settings_snapshot has commission_percent, margin_per_m2, base_price_low, base_price_high ✅
+            - totals_month has numeric signed_count, commission_sum, margin_sum, netto_sum,
+              brutto_sum, vat_sum ✅
+            - by_rep items have rep_id, rep_name, signed_count, commission_sum, margin_sum, brutto_sum ✅
+            - Each contract in contracts_month/contracts_all has id, client_name, area, building_type,
+              base_netto, margin_netto, total_netto, vat, vat_label, total_brutto, commission ✅
+          ROLE SCOPING:
+            - handlowiec only sees leads where assigned_to == their own user id ✅
+            - manager.contracts_month ⊇ handlowiec.contracts_month ✅
+            - admin.contracts_month ⊇ manager.contracts_month ✅
+            - Same superset relations verified for contracts_all ✅
+          MATH (verified against live settings values — commission_percent=50, margin_per_m2=100
+          currently in DB, base_price_low=275, base_price_high=200, tolerance ±0.01 PLN):
+            - Case A mieszkalny 150m² → base_netto=41250, margin_netto=15000, total_netto=56250,
+              VAT(8%)=4500, brutto=60750, commission=7500, vat_label="8%" ✅
+            - Case B gospodarczy 180m² → base_netto=49500, margin_netto=18000, total_netto=67500,
+              VAT(23%)=15525, brutto=83025, commission=9000, vat_label="23%" ✅
+            - Case C mieszkalny 250m² → base_rate=base_high=200, base_netto=50000,
+              margin_netto=25000, total_netto=75000, VAT(8%)=6000, brutto=81000,
+              commission=12500, vat_label="8%" ✅
+            - Case D mieszkalny 400m² (mixed VAT) → base_netto=80000, margin_netto=40000,
+              total_netto=120000, VAT mixed (300/400*8% + 100/400*23% = 11.75%)=14100,
+              brutto=134100, commission=20000, vat_label="Mieszany" ✅
+          All 4 test leads deleted by admin afterwards (status=200).
+          REGRESSION:
+            - GET /api/settings still returns commission_percent, margin_per_m2,
+              base_price_low, base_price_high ✅
+            - GET /api/dashboard/manager (manager) → 200 ✅
+            - GET /api/dashboard/rep (handlowiec) → 200 ✅
+          NOTE (non-blocking): margin_per_m2 in live settings is 100.0 (not the default 50.0),
+          likely from an earlier admin PUT. Math assertions used live settings values so this
+          is not a failure — just a heads-up if the review expected 50.0.
+
+
 frontend:
   - task: "CommissionCalculator widget on Admin / Manager / Rep dashboards"
     implemented: true
@@ -229,12 +301,13 @@ frontend:
 
 metadata:
   created_by: "main_agent"
-  version: "1.5"
-  test_sequence: 3
+  version: "1.6"
+  test_sequence: 4
   run_ui: false
 
 test_plan:
   current_focus:
+    - "Finance dashboard endpoint /api/dashboard/finance"
     - "Settings endpoint supports commission_percent + margin_per_m2"
     - "All existing auth + leads + dashboards endpoints remain green"
   stuck_tasks: []
@@ -279,3 +352,29 @@ agent_communication:
           if missing:
               await db.settings.update_one({"id": "global"}, {"$set": missing}, upsert=True)
       No other fixes needed.
+
+  - agent: "testing"
+    message: |
+      Phase 1.6 Finance dashboard testing complete — 29/29 assertions PASS
+      (see /app/backend_test_finance.py).
+      - Auth: 401 unauth, 200 for admin/manager/handlowiec.
+      - Response shape: all required top-level keys, period ISO bounds,
+        settings_snapshot, totals_month (all numeric), by_rep item keys,
+        and each contract entry with id/client_name/area/building_type/
+        base_netto/margin_netto/total_netto/vat/vat_label/total_brutto/commission.
+      - Role scoping: handlowiec sees only own leads; manager ⊇ handlowiec;
+        admin ⊇ manager for both contracts_month and contracts_all.
+      - Math: created 4 signed test leads as handlowiec and validated all fields
+        against live settings values (tolerance ±0.01 PLN):
+          A) mieszkalny 150m² → VAT 8%, expected values match ✅
+          B) gospodarczy 180m² → VAT 23% ✅
+          C) mieszkalny 250m² → base_high=200, VAT 8% ✅
+          D) mieszkalny 400m² → Mixed VAT (300/400*8% + 100/400*23% = 11.75%) ✅
+        All 4 test leads cleaned up via admin DELETE.
+      - Regression: GET /api/settings, /api/dashboard/manager, /api/dashboard/rep
+        all 200; commission_percent/margin_per_m2/base_price_low/base_price_high
+        still returned.
+      Minor observation: live DB has margin_per_m2=100.0 (not the default 50.0)
+      from a prior admin PUT. Math assertions used live settings so this is not
+      a failure — just a heads-up in case the review expected defaults.
+      No blockers. Endpoint is production-ready.

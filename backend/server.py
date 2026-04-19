@@ -643,6 +643,185 @@ async def rep_dashboard(user: Dict[str, Any] = Depends(require_roles("handlowiec
     }
 
 
+# --------------------------------------------------------------------------------------
+# Finance dashboard — aggregates signed-contracts revenue & commissions
+# Formulas mirror frontend CommissionCalculator + offerEngine:
+#   base_rate_per_m2 = base_price_low if area <= 200 else base_price_high
+#   base_netto       = area * base_rate_per_m2
+#   margin_netto     = area * margin_per_m2         (default; per-lead override via lead.margin_override)
+#   total_netto      = base_netto + margin_netto
+#   VAT:
+#     gospodarczy            => 23% of total_netto
+#     mieszkalny & area<=300 => 8% of total_netto
+#     mieszkalny & area>300  => proportional (300/area * 8% + (area-300)/area * 23%)
+#   total_brutto = total_netto + VAT
+#   commission   = (commission_percent / 100) * margin_netto
+# --------------------------------------------------------------------------------------
+def _compute_lead_financials(lead: Dict[str, Any], settings_doc: Dict[str, Any]) -> Dict[str, float]:
+    area = float(lead.get("building_area") or 0.0)
+    btype = lead.get("building_type") or "mieszkalny"
+    base_low = float(settings_doc.get("base_price_low") or 275.0)
+    base_high = float(settings_doc.get("base_price_high") or 200.0)
+    margin_per_m2 = float(settings_doc.get("margin_per_m2") or 50.0)
+    commission_pct = float(settings_doc.get("commission_percent") or 50.0)
+
+    base_rate = base_low if area <= 200 else base_high
+    base_netto = round(area * base_rate, 2)
+
+    # per-lead override margin (if present), else default
+    override = lead.get("margin_override")
+    if override is not None and isinstance(override, (int, float)) and override >= 0:
+        margin_netto = float(override)
+    else:
+        margin_netto = round(area * margin_per_m2, 2)
+
+    total_netto = round(base_netto + margin_netto, 2)
+
+    if btype == "gospodarczy":
+        vat = round(total_netto * 0.23, 2)
+        vat_label = "23%"
+    elif area <= 300 or area <= 0:
+        vat = round(total_netto * 0.08, 2)
+        vat_label = "8%"
+    else:
+        f8 = 300.0 / area
+        f23 = (area - 300.0) / area
+        vat = round(total_netto * f8 * 0.08 + total_netto * f23 * 0.23, 2)
+        vat_label = "Mieszany"
+
+    total_brutto = round(total_netto + vat, 2)
+    commission = round((commission_pct / 100.0) * margin_netto, 2)
+
+    return {
+        "area": area,
+        "building_type": btype,
+        "base_rate_per_m2": base_rate,
+        "base_netto": base_netto,
+        "margin_netto": margin_netto,
+        "total_netto": total_netto,
+        "vat": vat,
+        "vat_label": vat_label,
+        "total_brutto": total_brutto,
+        "commission": commission,
+        "commission_percent": commission_pct,
+    }
+
+
+def _month_bounds(ref: Optional[datetime] = None) -> tuple:
+    ref = ref or now()
+    start = datetime(ref.year, ref.month, 1, tzinfo=timezone.utc)
+    # first day of next month
+    if ref.month == 12:
+        end = datetime(ref.year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        end = datetime(ref.year, ref.month + 1, 1, tzinfo=timezone.utc)
+    return start, end
+
+
+@api.get("/dashboard/finance")
+async def finance_dashboard(user: Dict[str, Any] = Depends(get_current_user)):
+    """Return financial aggregation for the current month.
+    Scoping:
+      - admin      → all signed leads in the company
+      - manager    → signed leads by their team (reps where manager_id == user.id)
+      - handlowiec → only their own signed leads
+    """
+    settings_doc = await db.settings.find_one({"id": "global"}, {"_id": 0}) or {}
+
+    month_start, month_end = _month_bounds()
+
+    # Build scope query
+    if user["role"] == "admin":
+        scope_q: Dict[str, Any] = {"status": "podpisana"}
+        reps = await db.users.find({"role": "handlowiec"}, {"_id": 0, "password_hash": 0}).to_list(500)
+    elif user["role"] == "manager":
+        reps = await db.users.find({"manager_id": user["id"], "role": "handlowiec"}, {"_id": 0, "password_hash": 0}).to_list(500)
+        rep_ids = [r["id"] for r in reps] + [user["id"]]
+        scope_q = {"status": "podpisana", "$or": [{"assigned_to": {"$in": rep_ids}}, {"owner_manager_id": user["id"]}]}
+    else:  # handlowiec
+        reps = [await db.users.find_one({"id": user["id"]}, {"_id": 0, "password_hash": 0})]
+        reps = [r for r in reps if r]
+        scope_q = {"status": "podpisana", "assigned_to": user["id"]}
+
+    signed_all = await db.leads.find(scope_q, {"_id": 0}).to_list(5000)
+
+    def _within_month(dt: Any) -> bool:
+        if isinstance(dt, datetime):
+            d = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+            return month_start <= d < month_end
+        return False
+
+    rep_name_by_id = {r["id"]: (r.get("name") or r.get("email") or "—") for r in reps}
+
+    contracts_this_month = []
+    contracts_total = []
+    for l in signed_all:
+        fin = _compute_lead_financials(l, settings_doc)
+        rep_id = l.get("assigned_to")
+        entry = {
+            "id": l.get("id"),
+            "client_name": l.get("client_name"),
+            "address": l.get("address"),
+            "updated_at": iso(l.get("updated_at")),
+            "created_at": iso(l.get("created_at")),
+            "rep_id": rep_id,
+            "rep_name": rep_name_by_id.get(rep_id, "—") if rep_id else "—",
+            **fin,
+        }
+        contracts_total.append(entry)
+        if _within_month(l.get("updated_at")) or _within_month(l.get("created_at")):
+            contracts_this_month.append(entry)
+
+    def _sum(items, key):
+        return round(sum(float(i.get(key) or 0) for i in items), 2)
+
+    # Per-rep monthly breakdown (for manager & admin)
+    by_rep: Dict[str, Dict[str, Any]] = {}
+    for c in contracts_this_month:
+        rid = c.get("rep_id") or "_unassigned"
+        if rid not in by_rep:
+            by_rep[rid] = {
+                "rep_id": rid,
+                "rep_name": c.get("rep_name") or "—",
+                "signed_count": 0,
+                "commission_sum": 0.0,
+                "margin_sum": 0.0,
+                "brutto_sum": 0.0,
+            }
+        by_rep[rid]["signed_count"] += 1
+        by_rep[rid]["commission_sum"] = round(by_rep[rid]["commission_sum"] + (c.get("commission") or 0), 2)
+        by_rep[rid]["margin_sum"] = round(by_rep[rid]["margin_sum"] + (c.get("margin_netto") or 0), 2)
+        by_rep[rid]["brutto_sum"] = round(by_rep[rid]["brutto_sum"] + (c.get("total_brutto") or 0), 2)
+
+    return {
+        "period": {"month_start": iso(month_start), "month_end": iso(month_end)},
+        "settings_snapshot": {
+            "commission_percent": settings_doc.get("commission_percent"),
+            "margin_per_m2": settings_doc.get("margin_per_m2"),
+            "base_price_low": settings_doc.get("base_price_low"),
+            "base_price_high": settings_doc.get("base_price_high"),
+        },
+        "totals_month": {
+            "signed_count": len(contracts_this_month),
+            "commission_sum": _sum(contracts_this_month, "commission"),
+            "margin_sum": _sum(contracts_this_month, "margin_netto"),
+            "netto_sum": _sum(contracts_this_month, "total_netto"),
+            "brutto_sum": _sum(contracts_this_month, "total_brutto"),
+            "vat_sum": _sum(contracts_this_month, "vat"),
+        },
+        "totals_all_time": {
+            "signed_count": len(contracts_total),
+            "commission_sum": _sum(contracts_total, "commission"),
+            "margin_sum": _sum(contracts_total, "margin_netto"),
+            "brutto_sum": _sum(contracts_total, "total_brutto"),
+        },
+        "by_rep": sorted(by_rep.values(), key=lambda x: x["commission_sum"], reverse=True),
+        "contracts_month": sorted(contracts_this_month, key=lambda x: x.get("updated_at") or "", reverse=True),
+        "contracts_all": sorted(contracts_total, key=lambda x: x.get("updated_at") or "", reverse=True),
+    }
+
+
+
 async def seed_data():
     await db.users.create_index("email", unique=True)
     await db.leads.create_index("assigned_to")
