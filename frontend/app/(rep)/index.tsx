@@ -1,0 +1,166 @@
+import React, { useEffect, useState, useCallback } from "react";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { Feather } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
+import { colors, radius, spacing } from "../../src/theme";
+import { useAuth } from "../../src/lib/auth";
+import { api, formatApiError } from "../../src/lib/api";
+import { Button } from "../../src/components/Button";
+
+interface RepSummary {
+  total_leads: number;
+  signed: number;
+  meetings: number;
+  target: number;
+  percent: number;
+}
+
+export default function RepHome() {
+  const { user, logout } = useAuth();
+  const router = useRouter();
+  const [summary, setSummary] = useState<RepSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [working, setWorking] = useState(false); // Start/Stop mode
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setErr(null);
+    try {
+      const res = await api.get<RepSummary>("/dashboard/rep");
+      setSummary(res.data);
+    } catch (e) {
+      setErr(formatApiError(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const handleLogout = async () => {
+    await logout();
+    router.replace("/login");
+  };
+
+  return (
+    <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
+      <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
+        <View style={styles.header}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.hello}>Cześć, {user?.name?.split(" ")[0] || "Handlowcu"}</Text>
+            <Text style={styles.sub}>Tryb: Door-to-Door</Text>
+          </View>
+          <TouchableOpacity style={styles.iconBtn} onPress={handleLogout} testID="logout-button">
+            <Feather name="log-out" size={18} color={colors.textInverse} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Start/Stop work mode — big button */}
+        <View style={styles.workCard}>
+          <Text style={styles.workLabel}>TRYB PRACY</Text>
+          <TouchableOpacity
+            style={[styles.workBtn, { backgroundColor: working ? colors.error : colors.secondary }]}
+            activeOpacity={0.85}
+            onPress={() => setWorking((w) => !w)}
+            testID="toggle-work-mode-button"
+          >
+            <Feather name={working ? "square" : "play"} size={28} color="#fff" />
+            <Text style={styles.workBtnText}>{working ? "ZATRZYMAJ" : "ROZPOCZNIJ"}</Text>
+          </TouchableOpacity>
+          <Text style={styles.workHint}>
+            {working
+              ? "Tryb pracy aktywny · (śledzenie GPS w tle będzie dostępne w v2.0)"
+              : "Uruchom tryb pracy, aby rozpocząć dzień w terenie"}
+          </Text>
+        </View>
+
+        {/* Actions */}
+        <View style={styles.actions}>
+          <Button
+            title="Dodaj leada"
+            variant="primary"
+            icon={<Feather name="user-plus" size={18} color="#fff" />}
+            onPress={() => router.push("/(rep)/add-lead")}
+            testID="add-lead-button"
+          />
+          <Button
+            title="Generator ofert OZE"
+            variant="dark"
+            icon={<Feather name="file-text" size={18} color="#fff" />}
+            onPress={() => router.push("/(rep)/offer-generator")}
+            testID="open-offer-generator-button"
+            style={{ marginTop: 10 }}
+          />
+          <Button
+            title="Moje leady"
+            variant="outline"
+            icon={<Feather name="list" size={18} color={colors.primary} />}
+            onPress={() => router.push("/(rep)/my-leads")}
+            testID="my-leads-button"
+            style={{ marginTop: 10 }}
+          />
+        </View>
+
+        {/* My results */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Moje wyniki</Text>
+          {loading ? (
+            <ActivityIndicator color={colors.primary} />
+          ) : (
+            <>
+              <View style={styles.metricRow}>
+                <View style={styles.metric}>
+                  <Text style={styles.metricValue}>{summary?.signed || 0}</Text>
+                  <Text style={styles.metricLabel}>Podpisane</Text>
+                </View>
+                <View style={styles.metric}>
+                  <Text style={styles.metricValue}>{summary?.meetings || 0}</Text>
+                  <Text style={styles.metricLabel}>Spotkania</Text>
+                </View>
+                <View style={styles.metric}>
+                  <Text style={styles.metricValue}>{summary?.total_leads || 0}</Text>
+                  <Text style={styles.metricLabel}>Leady</Text>
+                </View>
+              </View>
+              <Text style={styles.goalLabel}>
+                Cel miesięczny: {summary?.signed || 0} / {summary?.target || 10}
+              </Text>
+              <View style={styles.track}>
+                <View style={[styles.fill, { width: `${Math.min(100, summary?.percent || 0)}%` }]} />
+              </View>
+              <Text style={styles.goalPct}>{Math.min(100, summary?.percent || 0)}%</Text>
+              {err && <Text style={{ color: colors.error, fontSize: 12, marginTop: 6 }}>{err}</Text>}
+            </>
+          )}
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: colors.bg },
+  header: { flexDirection: "row", alignItems: "center", padding: spacing.md },
+  hello: { fontSize: 22, fontWeight: "900", color: colors.textPrimary },
+  sub: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+  iconBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.inverted, alignItems: "center", justifyContent: "center" },
+  workCard: { margin: spacing.md, padding: spacing.lg, backgroundColor: colors.inverted, borderRadius: radius.lg, alignItems: "center" },
+  workLabel: { color: colors.textInverseSecondary, fontSize: 11, fontWeight: "900", letterSpacing: 2 },
+  workBtn: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 20, paddingHorizontal: 32, borderRadius: 999, marginVertical: 16, minWidth: 260, justifyContent: "center", shadowColor: "#000", shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
+  workBtnText: { color: "#fff", fontSize: 18, fontWeight: "900", letterSpacing: 1 },
+  workHint: { color: colors.textInverseSecondary, fontSize: 12, textAlign: "center" },
+  actions: { paddingHorizontal: spacing.md },
+  card: { margin: spacing.md, padding: spacing.md, backgroundColor: colors.paper, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border },
+  cardTitle: { fontSize: 16, fontWeight: "900", color: colors.textPrimary, marginBottom: 12 },
+  metricRow: { flexDirection: "row", gap: 8 },
+  metric: { flex: 1, backgroundColor: colors.bg, padding: 12, borderRadius: radius.md, alignItems: "center" },
+  metricValue: { fontSize: 24, fontWeight: "900", color: colors.textPrimary },
+  metricLabel: { fontSize: 11, color: colors.textSecondary, textTransform: "uppercase", letterSpacing: 0.5, marginTop: 2 },
+  goalLabel: { fontSize: 12, color: colors.textSecondary, marginTop: 14 },
+  track: { height: 12, backgroundColor: colors.zinc200, borderRadius: 999, marginTop: 6, overflow: "hidden" },
+  fill: { height: 12, backgroundColor: colors.primary, borderRadius: 999 },
+  goalPct: { textAlign: "right", fontSize: 12, fontWeight: "900", color: colors.primary, marginTop: 4 },
+});
