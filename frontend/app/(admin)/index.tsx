@@ -6,6 +6,7 @@ import { useRouter } from "expo-router";
 import { colors, radius, spacing } from "../../src/theme";
 import { useAuth } from "../../src/lib/auth";
 import { BrandLogo } from "../../src/components/BrandLogo";
+import { CommissionCalculator } from "../../src/components/CommissionCalculator";
 
 export default function AdminHome() {
   const router = useRouter();
@@ -38,6 +39,7 @@ export default function AdminHome() {
       </View>
 
       <ScrollView contentContainerStyle={{ padding: spacing.md, gap: 12 }}>
+        <CommissionCalculator testID="admin-commission-calculator" />
         {tiles.map((t) => (
           <TouchableOpacity
             key={t.title}

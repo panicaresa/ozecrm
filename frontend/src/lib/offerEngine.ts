@@ -405,8 +405,7 @@ ${visualsHtml ? `<div class="section-title" style="margin-top:14px">Wizualizacje
     <h3>Gwarancja</h3>
     <p>
       Na wykonane prace montażowe udzielamy <b>10-letniej gwarancji</b>. Producenci materiałów
-      pokryciowych zapewniają gwarancję materiałową <b>do 40 lat</b>. Instalacja fotowoltaiczna
-      objęta jest osobną gwarancją producenta paneli oraz falownika (do 25 lat).
+      pokryciowych zapewniają gwarancję materiałową <b>do 40 lat</b>.
     </p>
   </div>
   <div class="summary">

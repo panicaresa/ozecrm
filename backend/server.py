@@ -170,6 +170,8 @@ class SettingsIn(BaseModel):
     default_discount: float = 2000.0
     default_subsidy: float = 20000.0
     default_months: int = 119
+    commission_percent: float = 50.0  # % marży globalnej trafia do handlowca
+    margin_per_m2: float = 50.0  # bazowy szacunkowy % marży na m² (do widgetu prowizji)
     rrso_rates: List[Dict[str, Any]] = Field(default_factory=list)
     excluded_zip_codes: List[str] = Field(default_factory=list)
     company_name: str = "Polska Grupa OZE Sp. z o.o."

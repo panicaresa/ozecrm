@@ -216,6 +216,11 @@ export default function RepHome() {
             </>
           )}
         </View>
+
+        {/* Szybki kalkulator prowizji */}
+        <View style={{ marginHorizontal: spacing.md, marginTop: spacing.md }}>
+          <CommissionCalculator testID="rep-commission-calculator" />
+        </View>
       </ScrollView>
     </SafeAreaView>
   );

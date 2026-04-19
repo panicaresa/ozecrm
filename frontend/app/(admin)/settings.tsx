@@ -73,6 +73,8 @@ export default function AdminSettings() {
         default_discount: parseFloat(String(settings.default_discount || 0)) || 0,
         default_subsidy: parseFloat(String(settings.default_subsidy || 0)) || 0,
         default_months: parseInt(String(settings.default_months || 119), 10) || 119,
+        commission_percent: parseFloat(String(settings.commission_percent ?? 50)) || 0,
+        margin_per_m2: parseFloat(String(settings.margin_per_m2 ?? 50)) || 0,
         rrso_rates: settings.rrso_rates || [],
         excluded_zip_codes: settings.excluded_zip_codes || [],
         company_name: settings.company_name,
@@ -126,6 +128,33 @@ export default function AdminSettings() {
           <Field label="Rabat" value={String(settings.default_discount || "")} keyboardType="decimal-pad" onChangeText={(v) => update("default_discount", v)} />
           <Field label="Dotacja" value={String(settings.default_subsidy || "")} keyboardType="decimal-pad" onChangeText={(v) => update("default_subsidy", v)} />
           <Field label="Liczba rat (domyślnie)" value={String(settings.default_months || "")} keyboardType="number-pad" onChangeText={(v) => update("default_months", v)} />
+
+          <Text style={styles.section}>Kalkulator prowizji handlowca</Text>
+          <Text style={styles.hint}>
+            Parametry używane przez Szybki Kalkulator Prowizji (widget na dashboardach).
+          </Text>
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <View style={{ flex: 1 }}>
+              <Field
+                label="Prowizja (% marży)"
+                value={String(settings.commission_percent ?? "")}
+                keyboardType="decimal-pad"
+                onChangeText={(v) => update("commission_percent", v)}
+                placeholder="50"
+                testID="admin-commission-percent"
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Field
+                label="Marża na m² (PLN)"
+                value={String(settings.margin_per_m2 ?? "")}
+                keyboardType="decimal-pad"
+                onChangeText={(v) => update("margin_per_m2", v)}
+                placeholder="50"
+                testID="admin-margin-per-m2"
+              />
+            </View>
+          </View>
 
           <Text style={styles.section}>Bankowe RRSO</Text>
           <View style={{ gap: 8 }}>
@@ -192,6 +221,7 @@ const styles = StyleSheet.create({
   back: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.paper, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.border },
   title: { fontSize: 20, fontWeight: "900", color: colors.textPrimary },
   section: { fontSize: 13, fontWeight: "900", color: colors.textPrimary, textTransform: "uppercase", letterSpacing: 1, marginTop: 16, marginBottom: 8 },
+  hint: { fontSize: 12, color: colors.textSecondary, marginBottom: 8, lineHeight: 16 },
   listRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 12, backgroundColor: colors.paper, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border },
   listText: { color: colors.textPrimary, fontSize: 14 },
   addBtnSmall: { width: 52, height: 52, borderRadius: radius.md, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", marginBottom: 16 },

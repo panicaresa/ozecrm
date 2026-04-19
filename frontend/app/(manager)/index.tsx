@@ -19,6 +19,7 @@ import { ProgressRow } from "../../src/components/ProgressRow";
 import { StatusDonut } from "../../src/components/StatusDonut";
 import { LeadMap } from "../../src/components/LeadMap";
 import { BrandLogo } from "../../src/components/BrandLogo";
+import { CommissionCalculator } from "../../src/components/CommissionCalculator";
 import { Lead } from "../../src/components/LeadCard";
 
 interface Dashboard {
@@ -142,6 +143,11 @@ export default function ManagerDashboard() {
         <View style={styles.kpiGrid}>
           <KpiTile label="Wyceny" value={data?.kpi.quotes ?? 0} icon="file-text" accent={colors.primary} testID="kpi-quotes" />
           <KpiTile label="Aktywni w terenie" value={data?.kpi.active_reps ?? 0} icon="users" accent={colors.info} testID="kpi-active-reps" />
+        </View>
+
+        {/* Szybki kalkulator prowizji */}
+        <View style={{ marginHorizontal: spacing.md, marginTop: spacing.md }}>
+          <CommissionCalculator testID="manager-commission-calculator" />
         </View>
 
         <View style={styles.sectionCard}>
