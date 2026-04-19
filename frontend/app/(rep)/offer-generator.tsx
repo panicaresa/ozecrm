@@ -15,6 +15,7 @@ import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
+import * as ImagePicker from "expo-image-picker";
 import { colors, radius, spacing } from "../../src/theme";
 import { Field } from "../../src/components/Field";
 import { Button } from "../../src/components/Button";
@@ -28,6 +29,7 @@ import {
   OfferConfig,
 } from "../../src/lib/offerEngine";
 import { LOGO_PNG_BASE64 } from "../../src/lib/logoBase64";
+import { Image } from "react-native";
 
 type Step = 1 | 2 | 3 | 4;
 
@@ -65,8 +67,9 @@ export default function OfferGenerator() {
   const [postalCode, setPostalCode] = useState("");
   const [generating, setGenerating] = useState(false);
   const [intro, setIntro] = useState(
-    "Szanowni Państwo, dziękujemy za zainteresowanie naszą ofertą. Przedstawiamy kompletny kosztorys kompleksowej modernizacji dachu przygotowany indywidualnie pod Państwa inwestycję, uwzględniający obowiązujące stawki VAT oraz — jeśli wybrano tę opcję — symulację finansowania w ramach Eko-Abonamentu."
+    "Szanowni Państwo, dziękujemy za zainteresowanie naszą ofertą wymiany i modernizacji pokrycia dachowego. Nowy dach to nie tylko estetyka — to trwałość budynku, niższe koszty ogrzewania i spokój na kolejne dekady. Poniżej znajdą Państwo kompletny kosztorys wraz z obowiązującymi stawkami VAT oraz — jeśli wybrano tę opcję — symulację finansowania w ramach Eko-Abonamentu."
   );
+  const [uploadingFor, setUploadingFor] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -129,6 +132,39 @@ export default function OfferGenerator() {
     if (buildings.length === 1) return;
     setBuildings(buildings.filter((b) => b.id !== id));
   };
+
+  const pickVizPhoto = async (buildingId: string, slot: "before" | "after", src: "camera" | "gallery") => {
+    setUploadingFor(`${buildingId}-${slot}`);
+    try {
+      let res: ImagePicker.ImagePickerResult;
+      if (src === "camera") {
+        const perm = await ImagePicker.requestCameraPermissionsAsync();
+        if (!perm.granted) {
+          Alert.alert("Brak uprawnień", "Włącz kamerę w ustawieniach.");
+          return;
+        }
+        res = await ImagePicker.launchCameraAsync({ quality: 0.5, base64: true, allowsEditing: true, aspect: [4, 3] });
+      } else {
+        res = await ImagePicker.launchImageLibraryAsync({ quality: 0.5, base64: true, allowsEditing: true, aspect: [4, 3] });
+      }
+      if (!res.canceled && res.assets?.[0]?.base64) {
+        const b64 = `data:${res.assets[0].mimeType || "image/jpeg"};base64,${res.assets[0].base64}`;
+        const patch = slot === "before" ? { beforeBase64: b64 } : { afterBase64: b64 };
+        updateBuilding(buildingId, patch);
+      }
+    } catch (e: any) {
+      Alert.alert("Błąd", e?.message || "Nie udało się wybrać zdjęcia");
+    } finally {
+      setUploadingFor(null);
+    }
+  };
+
+  const offerVizPicker = (buildingId: string, slot: "before" | "after") =>
+    Alert.alert(slot === "before" ? "Stan obecny" : "Wizualizacja po", "Wybierz źródło zdjęcia", [
+      { text: "Anuluj", style: "cancel" },
+      { text: "Aparat", onPress: () => pickVizPhoto(buildingId, slot, "camera") },
+      { text: "Galeria", onPress: () => pickVizPhoto(buildingId, slot, "gallery") },
+    ]);
 
   const generatePdf = async () => {
     if (!clientName.trim()) {
@@ -293,6 +329,54 @@ export default function OfferGenerator() {
                           : "Mieszany proporcjonalny (pow. 300 m²)"
                       }
                     </Text>
+                  </View>
+
+                  <Text style={[styles.sectionLabel, { marginTop: 14 }]}>Wizualizacje (opcjonalnie)</Text>
+                  <Text style={styles.vizHelp}>Wgraj zdjęcie "przed" i "po" — pojawią się obok siebie w PDF nad kosztorysem.</Text>
+                  <View style={styles.vizRow}>
+                    {(["before", "after"] as const).map((slot) => {
+                      const img = slot === "before" ? b.beforeBase64 : b.afterBase64;
+                      const busy = uploadingFor === `${b.id}-${slot}`;
+                      return (
+                        <TouchableOpacity
+                          key={slot}
+                          style={styles.vizTile}
+                          activeOpacity={0.8}
+                          onPress={() => offerVizPicker(b.id, slot)}
+                          testID={`viz-${slot}-${idx}`}
+                          disabled={busy}
+                        >
+                          {img ? (
+                            <Image source={{ uri: img }} style={styles.vizImg} resizeMode="cover" />
+                          ) : (
+                            <View style={styles.vizEmpty}>
+                              {busy ? (
+                                <ActivityIndicator color={colors.primary} size="small" />
+                              ) : (
+                                <>
+                                  <Feather name={slot === "before" ? "camera" : "image"} size={24} color={colors.textSecondary} />
+                                  <Text style={styles.vizEmptyText}>Dodaj zdjęcie</Text>
+                                </>
+                              )}
+                            </View>
+                          )}
+                          <View style={[styles.vizCap, { backgroundColor: slot === "before" ? "#64748B" : colors.primary }]}>
+                            <Text style={styles.vizCapText}>
+                              {slot === "before" ? "Stan obecny" : "Wizualizacja po"}
+                            </Text>
+                          </View>
+                          {img && (
+                            <TouchableOpacity
+                              style={styles.vizClear}
+                              onPress={() => updateBuilding(b.id, slot === "before" ? { beforeBase64: null } : { afterBase64: null })}
+                              testID={`viz-clear-${slot}-${idx}`}
+                            >
+                              <Feather name="x" size={12} color="#fff" />
+                            </TouchableOpacity>
+                          )}
+                        </TouchableOpacity>
+                      );
+                    })}
                   </View>
                 </View>
               ))}
@@ -506,6 +590,15 @@ const styles = StyleSheet.create({
   pillTextActive: { color: "#fff" },
   vatBadge: { backgroundColor: `${colors.primary}22`, paddingHorizontal: 10, paddingVertical: 6, borderRadius: radius.sm, alignSelf: "flex-start" },
   vatBadgeText: { fontSize: 11, color: colors.primary, fontWeight: "800", letterSpacing: 0.5 },
+  vizHelp: { fontSize: 11, color: colors.textSecondary, marginBottom: 8, marginTop: -4 },
+  vizRow: { flexDirection: "row", gap: 10, marginBottom: 8 },
+  vizTile: { flex: 1, aspectRatio: 4 / 3, borderRadius: radius.md, overflow: "hidden", borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.bg, position: "relative" },
+  vizImg: { width: "100%", height: "100%" },
+  vizEmpty: { flex: 1, alignItems: "center", justifyContent: "center", gap: 6 },
+  vizEmptyText: { color: colors.textSecondary, fontSize: 11, fontWeight: "600" },
+  vizCap: { position: "absolute", bottom: 0, left: 0, right: 0, paddingVertical: 5, paddingHorizontal: 6 },
+  vizCapText: { color: "#fff", fontSize: 10, fontWeight: "800", textTransform: "uppercase", letterSpacing: 0.8, textAlign: "center" },
+  vizClear: { position: "absolute", top: 4, right: 4, width: 22, height: 22, borderRadius: 11, backgroundColor: "rgba(239,68,68,0.92)", alignItems: "center", justifyContent: "center" },
   addBtn: { flexDirection: "row", gap: 8, alignItems: "center", justifyContent: "center", paddingVertical: 14, borderRadius: radius.md, borderWidth: 2, borderStyle: "dashed", borderColor: colors.primary },
   addBtnText: { color: colors.primary, fontWeight: "800", fontSize: 14 },
   row2: { flexDirection: "row", gap: 8 },
