@@ -10,6 +10,7 @@ import { useAuth } from "../../src/lib/auth";
 import { api, formatApiError } from "../../src/lib/api";
 import { Button } from "../../src/components/Button";
 import { BrandLogo } from "../../src/components/BrandLogo";
+import { CommissionCalculator } from "../../src/components/CommissionCalculator";
 
 interface RepSummary {
   total_leads: number;
