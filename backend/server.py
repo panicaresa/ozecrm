@@ -660,6 +660,13 @@ async def seed_data():
                 "updated_at": now(),
             }
         )
+    else:
+        # Migration: backfill any new SettingsIn fields on existing doc
+        defaults = SettingsIn(rrso_rates=DEFAULT_RRSO, excluded_zip_codes=["77-400"]).dict()
+        missing = {k: v for k, v in defaults.items() if k not in existing_settings}
+        if missing:
+            await db.settings.update_one({"id": "global"}, {"$set": missing})
+            logger.info(f"Settings migration: backfilled keys {list(missing.keys())}")
 
     admin_email = os.environ["ADMIN_EMAIL"].lower()
     manager_email = os.environ["MANAGER_EMAIL"].lower()

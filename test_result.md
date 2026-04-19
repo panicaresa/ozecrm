@@ -143,6 +143,12 @@ backend:
           MAIN AGENT should add a small migration step in seed_data (e.g. use $set with
           SettingsIn(...).dict() merged on top of the existing doc, or $setOnInsert-style upsert that
           fills only missing keys) so production DBs upgrade cleanly without requiring a manual PUT.
+      - working: true
+        agent: "main"
+        comment: |
+          Implemented the recommended migration: seed_data() now backfills any missing SettingsIn
+          keys on the existing settings/global doc with $set. Backend restarted. Future upgrades
+          will automatically gain commission_percent and margin_per_m2 without needing an admin PUT.
 
   - task: "All existing auth + leads + dashboards endpoints remain green"
     implemented: true
