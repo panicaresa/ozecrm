@@ -1,31 +1,36 @@
+// Brand palette — derived from Grupa OZE logo (blue→green gradient, black wordmark)
 export const colors = {
-  bg: "#F4F4F5",
+  bg: "#F4F6F9",
   paper: "#FFFFFF",
-  inverted: "#09090B",
-  primary: "#FF4D00",
-  primaryHover: "#E64500",
-  secondary: "#0055FF",
-  success: "#10B981",
+  inverted: "#0B2545", // deep navy — primary dark surface
+  invertedAlt: "#0F1F3D",
+  primary: "#30A0E3", // brand blue
+  primaryHover: "#1F87C6",
+  secondary: "#84D13C", // brand green
+  secondaryHover: "#6EB52A",
+  accent: "#F59E0B", // amber accent reserved for warnings
+  success: "#84D13C",
   warning: "#F59E0B",
   error: "#EF4444",
-  info: "#3B82F6",
-  textPrimary: "#09090B",
-  textSecondary: "#71717A",
+  info: "#30A0E3",
+  textPrimary: "#0B1220",
+  textSecondary: "#64748B",
   textInverse: "#FFFFFF",
-  textInverseSecondary: "#A1A1AA",
-  border: "#E4E4E7",
-  borderDark: "#27272A",
-  zinc100: "#F4F4F5",
-  zinc200: "#E4E4E7",
-  zinc300: "#D4D4D8",
+  textInverseSecondary: "#B6C5DB",
+  border: "#E2E8F0",
+  borderDark: "#1E3A5F",
+  zinc100: "#F1F5F9",
+  zinc200: "#E2E8F0",
+  zinc300: "#CBD5E1",
 };
 
+// Lead status palette — fits the OZE brand (blue/green/amber/slate)
 export const statusColor: Record<string, string> = {
-  podpisana: "#FF4D00",
-  decyzja: "#0055FF",
+  podpisana: "#84D13C",
+  decyzja: "#30A0E3",
   umowione: "#F59E0B",
-  nie_zainteresowany: "#71717A",
-  nowy: "#10B981",
+  nie_zainteresowany: "#94A3B8",
+  nowy: "#0B2545",
 };
 
 export const statusLabel: Record<string, string> = {
@@ -36,13 +41,5 @@ export const statusLabel: Record<string, string> = {
   nowy: "Nowy",
 };
 
-export const spacing = {
-  xs: 4,
-  sm: 8,
-  md: 16,
-  lg: 24,
-  xl: 32,
-  xxl: 48,
-};
-
+export const spacing = { xs: 4, sm: 8, md: 16, lg: 24, xl: 32, xxl: 48 };
 export const radius = { sm: 6, md: 8, lg: 12, xl: 16, pill: 999 };

@@ -15,10 +15,11 @@ interface Props {
   pins: MapPin[];
   height?: number;
   testID?: string;
+  selectedId?: string | null;
+  onSelectPin?: (id: string | null) => void;
 }
 
-// Native version — full interactive map.
-export const LeadMap: React.FC<Props> = ({ pins, height = 280, testID }) => {
+export const LeadMap: React.FC<Props> = ({ pins, height = 280, testID, selectedId, onSelectPin }) => {
   const valid = pins.filter((p) => typeof p.lat === "number" && typeof p.lng === "number");
   const center =
     valid.length > 0
@@ -38,6 +39,7 @@ export const LeadMap: React.FC<Props> = ({ pins, height = 280, testID }) => {
             title={p.client_name || ""}
             description={statusLabel[p.status || ""] || p.status}
             pinColor={statusColor[p.status || ""] || colors.primary}
+            onPress={() => onSelectPin?.(selectedId === p.id ? null : p.id)}
           />
         ))}
       </MapView>

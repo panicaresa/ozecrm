@@ -53,7 +53,13 @@ export default function MyLeads() {
           keyExtractor={(l) => l.id}
           contentContainerStyle={{ padding: spacing.md, gap: 10 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} />}
-          renderItem={({ item }) => <LeadCard lead={item} testID={`my-lead-${item.id}`} />}
+          renderItem={({ item }) => (
+            <LeadCard
+              lead={item}
+              onPress={() => router.push(`/(rep)/lead/${item.id}` as any)}
+              testID={`my-lead-${item.id}`}
+            />
+          )}
           ListEmptyComponent={<Text style={styles.empty}>{err || "Brak leadów"}</Text>}
         />
       )}

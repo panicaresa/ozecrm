@@ -7,6 +7,7 @@ import { colors, radius, spacing } from "../../src/theme";
 import { useAuth } from "../../src/lib/auth";
 import { api, formatApiError } from "../../src/lib/api";
 import { Button } from "../../src/components/Button";
+import { BrandLogo } from "../../src/components/BrandLogo";
 
 interface RepSummary {
   total_leads: number;
@@ -48,14 +49,17 @@ export default function RepHome() {
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
+        <View style={styles.topbar}>
+          <BrandLogo height={28} testID="rep-brand-logo" />
+          <TouchableOpacity style={styles.iconBtn} onPress={handleLogout} testID="logout-button">
+            <Feather name="log-out" size={18} color={colors.textInverse} />
+          </TouchableOpacity>
+        </View>
         <View style={styles.header}>
           <View style={{ flex: 1 }}>
             <Text style={styles.hello}>Cześć, {user?.name?.split(" ")[0] || "Handlowcu"}</Text>
             <Text style={styles.sub}>Tryb: Door-to-Door</Text>
           </View>
-          <TouchableOpacity style={styles.iconBtn} onPress={handleLogout} testID="logout-button">
-            <Feather name="log-out" size={18} color={colors.textInverse} />
-          </TouchableOpacity>
         </View>
 
         {/* Start/Stop work mode — big button */}
@@ -143,10 +147,11 @@ export default function RepHome() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
-  header: { flexDirection: "row", alignItems: "center", padding: spacing.md },
+  topbar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: spacing.md, paddingTop: spacing.sm, paddingBottom: 4 },
+  header: { flexDirection: "row", alignItems: "center", padding: spacing.md, paddingTop: 4 },
   hello: { fontSize: 22, fontWeight: "900", color: colors.textPrimary },
   sub: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
-  iconBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.inverted, alignItems: "center", justifyContent: "center" },
+  iconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.inverted, alignItems: "center", justifyContent: "center" },
   workCard: { margin: spacing.md, padding: spacing.lg, backgroundColor: colors.inverted, borderRadius: radius.lg, alignItems: "center" },
   workLabel: { color: colors.textInverseSecondary, fontSize: 11, fontWeight: "900", letterSpacing: 2 },
   workBtn: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 20, paddingHorizontal: 32, borderRadius: 999, marginVertical: 16, minWidth: 260, justifyContent: "center", shadowColor: "#000", shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6 },

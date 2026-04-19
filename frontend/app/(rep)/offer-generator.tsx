@@ -27,6 +27,7 @@ import {
   buildOfferHtml,
   OfferConfig,
 } from "../../src/lib/offerEngine";
+import { LOGO_PNG_BASE64 } from "../../src/lib/logoBase64";
 
 type Step = 1 | 2 | 3 | 4;
 

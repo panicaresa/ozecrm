@@ -173,148 +173,262 @@ export interface PdfContext {
     phone: string;
   };
   rrsoLabel: string;
+  logoDataUrl?: string; // base64 data-url of brand logo
 }
 
 export function buildOfferHtml(ctx: PdfContext): string {
-  const { buildings, totals, cfg, client, author, validity, company, rrsoLabel } = ctx;
+  const { buildings, totals, cfg, client, author, validity, company, rrsoLabel, logoDataUrl } = ctx;
   const today = new Date().toLocaleDateString("pl-PL");
 
   const rows = buildings
     .map((b, i) => {
       const calc = totals.buildings.find((x) => x.buildingId === b.id);
       if (!calc) return "";
+      const subtitle =
+        (b.type === "mieszkalny" ? "Obiekt mieszkalny" : "Obiekt gospodarczy") +
+        (b.material ? " · " + escapeHtml(b.material) : "") +
+        (b.color ? " · " + escapeHtml(b.color) : "");
       return `
       <tr>
-        <td>${i + 1}</td>
-        <td>
-          <b>${escapeHtml(b.name)}</b><br/>
-          <span style="color:#6b7280;font-size:11px">
-            ${b.type === "mieszkalny" ? "Mieszkalny" : "Gospodarczy"} · ${b.area} m²
-            ${b.material ? " · " + escapeHtml(b.material) : ""}
-            ${b.color ? " · " + escapeHtml(b.color) : ""}
-          </span>
+        <td class="col-lp">${i + 1}</td>
+        <td class="col-desc">
+          <div class="row-title">Modernizacja dachu + PV — ${escapeHtml(b.name)}</div>
+          <div class="row-sub">${subtitle}</div>
         </td>
-        <td>${b.area}</td>
-        <td>m²</td>
-        <td style="text-align:right">${fmtPln(calc.ratePerM2)}</td>
-        <td style="text-align:right">${fmtPln(calc.net)}</td>
-        <td style="text-align:center">${calc.vatLabel}</td>
+        <td class="col-qty">${b.area}</td>
+        <td class="col-unit">m²</td>
+        <td class="col-price">${fmtPln(calc.ratePerM2)}</td>
+        <td class="col-value">${fmtPln(calc.net)}</td>
+        <td class="col-vat"><span class="vat-badge">${calc.vatLabel}</span></td>
       </tr>`;
     })
     .join("");
 
-  const installmentRow =
-    cfg.installments && totals.monthlyInstallment !== null
-      ? `<tr><td colspan="2" style="color:#FF4D00;font-weight:700">Rata miesięczna (${rrsoLabel}, ${cfg.months} m-cy)</td>
-         <td style="text-align:right;color:#FF4D00;font-weight:700">${fmtPln(totals.monthlyInstallment)}/mc</td></tr>`
-      : "";
+  const headerLogo = logoDataUrl
+    ? `<img src="${logoDataUrl}" alt="Grupa OZE" style="height:40px;width:auto" />`
+    : `<div style="font-weight:900;letter-spacing:-1px;font-size:24px;color:#0B2545">GRUPA <span style="color:#30A0E3">OZE</span></div>`;
 
-  const discountRow = cfg.discountEnabled
-    ? `<tr><td colspan="2">Rabat</td><td style="text-align:right">− ${fmtPln(cfg.discount)}</td></tr>
-       <tr><td colspan="2">Cena po rabacie</td><td style="text-align:right">${fmtPln(totals.afterDiscount)}</td></tr>`
-    : "";
-
-  const subsidyRow = cfg.subsidyEnabled
-    ? `<tr><td colspan="2">Dotacja</td><td style="text-align:right">− ${fmtPln(cfg.subsidy)}</td></tr>
-       <tr><td colspan="2"><b>Koszt końcowy klienta</b></td><td style="text-align:right"><b>${fmtPln(totals.finalCost)}</b></td></tr>`
-    : "";
+  const showDiscount = cfg.discountEnabled && cfg.discount > 0;
+  const showSubsidy = cfg.subsidyEnabled && cfg.subsidy > 0;
+  const showInstallment = cfg.installments && totals.monthlyInstallment !== null;
+  const finalPayable = showSubsidy || showDiscount ? totals.finalCost : totals.grossTotal;
 
   return `<!doctype html>
 <html lang="pl">
 <head>
 <meta charset="utf-8"/>
-<title>Oferta Handlowa — ${escapeHtml(client.name)}</title>
+<title>Oferta Handlowa — ${escapeHtml(client.name || "Klient")}</title>
 <style>
-  body{font-family:-apple-system,Helvetica,Arial,sans-serif;color:#111;margin:0;padding:24px}
-  header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #f3f4f6;padding-bottom:16px;margin-bottom:24px}
-  .brand{font-size:22px;font-weight:900;color:#FF4D00;letter-spacing:-0.5px}
-  h1{font-size:28px;margin:0 0 4px 0}
-  h2{font-size:14px;margin:16px 0 4px 0;color:#6b7280;text-transform:uppercase;letter-spacing:.5px}
-  table{width:100%;border-collapse:collapse;margin-top:12px;font-size:12px}
-  th,td{border-bottom:1px solid #e5e7eb;padding:10px 8px;vertical-align:top}
-  th{background:#09090B;color:#fff;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
-  .summary{margin-top:24px;float:right;width:55%;font-size:14px}
-  .summary table{border:none}
-  .summary td{border:none;padding:6px 4px}
-  .gross{background:#09090B;color:#fff;padding:12px;border-radius:8px;font-size:16px;font-weight:900;display:flex;justify-content:space-between}
-  .warranty{float:left;width:40%;font-size:12px;color:#374151;background:#f9fafb;padding:12px;border-radius:8px}
-  .foot{clear:both;margin-top:40px;border-top:1px solid #e5e7eb;padding-top:8px;font-size:10px;color:#9ca3af;text-align:center}
+  *{box-sizing:border-box}
+  @page{size:A4;margin:18mm 14mm}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;color:#0B1220;margin:0;padding:0;font-size:12px;line-height:1.5}
+  .doc{padding:0}
+  header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #30A0E3;padding-bottom:16px;margin-bottom:28px}
+  .firm{font-size:11px;color:#475569;line-height:1.6;text-align:right}
+  .firm .firm-name{font-weight:800;color:#0B2545;font-size:12px}
+  .firm a{color:#30A0E3;text-decoration:none}
+  .title-block{margin-bottom:24px;display:flex;justify-content:space-between;gap:24px}
+  .title-left h1{margin:0;font-size:11px;color:#64748B;text-transform:uppercase;letter-spacing:2px;font-weight:700}
+  .title-left .doc-title{font-size:28px;font-weight:900;color:#0B2545;letter-spacing:-1px;margin-top:4px}
+  .title-right{text-align:right;font-size:11px;color:#64748B}
+  .title-right .meta{margin:3px 0}
+  .title-right b{color:#0B1220}
+  .client-box{background:#F1F5F9;border-left:4px solid #30A0E3;padding:14px 18px;border-radius:6px;margin-bottom:24px;display:flex;justify-content:space-between;gap:20px}
+  .client-box .label{font-size:10px;color:#64748B;text-transform:uppercase;letter-spacing:1.5px;font-weight:700;margin-bottom:4px}
+  .client-box .value{font-size:15px;color:#0B2545;font-weight:700}
+  .client-box .addr{font-size:12px;color:#475569;margin-top:2px}
+  .intro{color:#334155;line-height:1.65;margin-bottom:20px;text-align:justify}
+  .section-title{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:2px;color:#64748B;margin:22px 0 10px 0;padding-bottom:6px;border-bottom:1px solid #E2E8F0}
+  table.pricing{width:100%;border-collapse:collapse;font-size:11px}
+  table.pricing thead th{background:linear-gradient(135deg,#0B2545 0%,#1e3a5f 100%);color:#fff;text-align:left;padding:10px 8px;font-size:10px;text-transform:uppercase;letter-spacing:1px;font-weight:700}
+  table.pricing thead th:first-child{border-top-left-radius:6px}
+  table.pricing thead th:last-child{border-top-right-radius:6px}
+  table.pricing tbody tr{border-bottom:1px solid #E2E8F0}
+  table.pricing tbody tr:nth-child(even){background:#F8FAFC}
+  table.pricing td{padding:12px 8px;vertical-align:top}
+  .col-lp{width:32px;font-weight:700;color:#64748B;text-align:center}
+  .col-desc{font-size:12px}
+  .row-title{font-weight:700;color:#0B2545}
+  .row-sub{font-size:10px;color:#64748B;margin-top:3px}
+  .col-qty{width:50px;text-align:right;font-weight:600}
+  .col-unit{width:40px;color:#64748B}
+  .col-price,.col-value{width:90px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .col-value{font-weight:700;color:#0B2545}
+  .col-vat{width:80px;text-align:center}
+  .vat-badge{display:inline-block;padding:3px 8px;border-radius:999px;background:#E0F2FE;color:#0369A1;font-weight:700;font-size:10px}
+  .totals-row{display:flex;gap:16px;margin-top:24px;align-items:flex-start}
+  .warranty{flex:1;background:#EFF6FF;border:1px solid #BFDBFE;border-left:4px solid #30A0E3;padding:16px;border-radius:8px}
+  .warranty h3{margin:0 0 6px 0;font-size:12px;color:#0B2545;text-transform:uppercase;letter-spacing:1px;font-weight:800}
+  .warranty p{margin:0;color:#1e3a5f;font-size:11px;line-height:1.6}
+  .summary{flex:1.1;background:#fff;border:1px solid #E2E8F0;border-radius:8px;padding:4px 14px;box-shadow:0 1px 2px rgba(0,0,0,0.04)}
+  .summary table{width:100%;border-collapse:collapse}
+  .summary td{padding:8px 0;font-size:12px;border-bottom:1px solid #F1F5F9}
+  .summary tr:last-child td{border-bottom:none}
+  .summary .label{color:#475569}
+  .summary .value{text-align:right;font-weight:700;color:#0B1220;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .summary .muted .value{color:#64748B}
+  .summary .discount .value{color:#EF4444}
+  .summary .gross{background:linear-gradient(135deg,#0B2545,#1e3a5f);color:#fff;padding:14px;border-radius:8px;margin:10px -14px;display:flex;justify-content:space-between;align-items:center}
+  .summary .gross .label{color:#B6C5DB;font-size:10px;text-transform:uppercase;letter-spacing:1.5px;font-weight:700}
+  .summary .gross .amount{font-size:20px;font-weight:900;letter-spacing:-0.5px}
+  .summary .final{background:#F0FDF4;border:1px solid #BBF7D0;border-radius:6px;padding:10px;margin:6px -4px;display:flex;justify-content:space-between;align-items:center}
+  .summary .final .label{color:#166534;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px}
+  .summary .final .amount{color:#166534;font-size:17px;font-weight:900}
+  .installment{background:linear-gradient(135deg,#30A0E3 0%,#1F87C6 100%);color:#fff;padding:14px;border-radius:8px;margin-top:12px;display:flex;justify-content:space-between;align-items:center}
+  .installment .label{font-size:10px;text-transform:uppercase;letter-spacing:1.5px;font-weight:700;opacity:0.9}
+  .installment .sublabel{font-size:10px;opacity:0.85;margin-top:2px}
+  .installment .amount{font-size:20px;font-weight:900}
+  .installment .mo{font-size:11px;opacity:0.9}
+  .notice{margin-top:12px;padding:10px 12px;background:#FEF2F2;border-left:3px solid #EF4444;border-radius:4px;color:#991B1B;font-size:11px}
+  .footer{margin-top:40px;padding-top:14px;border-top:1px solid #E2E8F0;text-align:center;font-size:9px;color:#94A3B8;line-height:1.6}
 </style>
 </head>
 <body>
+<div class="doc">
+
 <header>
-  <div>
-    <div class="brand">GRUPA OZE</div>
-    <div style="font-size:11px;color:#6b7280;margin-top:4px">${escapeHtml(company.name)}</div>
-  </div>
-  <div style="text-align:right;font-size:11px;color:#374151">
+  <div>${headerLogo}</div>
+  <div class="firm">
+    <div class="firm-name">${escapeHtml(company.name)}</div>
     <div>${escapeHtml(company.address)}</div>
     <div>${escapeHtml(company.zip)}</div>
     <div>${escapeHtml(company.nip)}</div>
-    <div style="color:#0055FF">${escapeHtml(company.email)}</div>
-    <div style="color:#0055FF">${escapeHtml(company.phone)}</div>
+    <div><a>${escapeHtml(company.email)}</a></div>
+    <div><a>${escapeHtml(company.phone)}</a></div>
   </div>
 </header>
 
-<div style="display:flex;justify-content:space-between;gap:16px;margin-bottom:16px">
-  <div>
-    <h2>Przygotowano dla</h2>
-    <div style="font-size:16px;font-weight:700">${escapeHtml(client.name || "—")}</div>
-    <h2>Adres inwestycji</h2>
-    <div style="color:#374151">${escapeHtml(client.address || "—")}</div>
+<div class="title-block">
+  <div class="title-left">
+    <h1>Dokument</h1>
+    <div class="doc-title">OFERTA HANDLOWA</div>
   </div>
-  <div style="text-align:right">
-    <h1>OFERTA HANDLOWA</h1>
-    <div style="font-size:11px;color:#6b7280">Data: ${today}</div>
-    <div style="font-size:11px;color:#6b7280">Ważność: ${escapeHtml(validity)}</div>
-    <div style="font-size:11px;color:#6b7280">Przygotował: ${escapeHtml(author)}</div>
+  <div class="title-right">
+    <div class="meta"><b>Data sporządzenia:</b> ${today}</div>
+    <div class="meta"><b>Ważność oferty:</b> ${escapeHtml(validity)}</div>
+    <div class="meta"><b>Przygotował:</b> ${escapeHtml(author)}</div>
   </div>
 </div>
 
-<p style="font-size:13px;line-height:1.6;color:#374151">
-  Szanowni Państwo, w odpowiedzi na zainteresowanie naszymi usługami, przedstawiamy ofertę
-  kompleksowej modernizacji dachu wraz z instalacją systemu fotowoltaicznego. Poniżej znajdą Państwo
-  kosztorys uwzględniający obowiązujące stawki VAT oraz, jeśli wybrano tę opcję, symulację finansowania.
+<div class="client-box">
+  <div style="flex:1">
+    <div class="label">Przygotowano dla</div>
+    <div class="value">${escapeHtml(client.name || "—")}</div>
+    <div class="addr">${escapeHtml(client.address || "Adres inwestycji — do uzupełnienia")}</div>
+  </div>
+  <div style="text-align:right">
+    <div class="label">Łączny metraż</div>
+    <div class="value">${totals.totalArea} m²</div>
+  </div>
+</div>
+
+<p class="intro">
+  Szanowni Państwo, dziękujemy za zainteresowanie naszą ofertą. Poniżej przedstawiamy kompletny
+  kosztorys kompleksowej modernizacji dachu wraz z instalacją systemu fotowoltaicznego,
+  uwzględniający obowiązujące stawki VAT${showSubsidy || showDiscount ? ", rabaty oraz dofinansowanie" : ""}${
+    showInstallment ? " oraz symulację finansowania w ramach Eko-Abonamentu" : ""
+  }.
 </p>
 
-<table>
+<div class="section-title">Kosztorys</div>
+<table class="pricing">
   <thead>
     <tr>
-      <th>Lp.</th><th>Opis usługi / materiału</th><th>Ilość</th><th>J.m.</th>
-      <th style="text-align:right">Cena jedn. netto</th>
-      <th style="text-align:right">Wartość netto</th><th style="text-align:center">VAT</th>
+      <th class="col-lp">Lp.</th>
+      <th>Opis usługi / materiału</th>
+      <th class="col-qty" style="text-align:right">Ilość</th>
+      <th class="col-unit">J.m.</th>
+      <th class="col-price" style="text-align:right">Cena jedn.<br/><span style="font-weight:400;opacity:0.7">PLN netto</span></th>
+      <th class="col-value" style="text-align:right">Wartość<br/><span style="font-weight:400;opacity:0.7">PLN netto</span></th>
+      <th class="col-vat" style="text-align:center">VAT</th>
     </tr>
   </thead>
   <tbody>${rows}</tbody>
 </table>
 
-<div class="warranty">
-  <b>Gwarancja</b><br/>
-  Na wykonane prace udzielamy 10-letniej gwarancji. Producenci materiałów zapewniają gwarancję
-  do 40 lat. Instalacja PV objęta osobną gwarancją producenta paneli.
-</div>
-
-<div class="summary">
-  <table>
-    <tr><td>Razem netto</td><td style="text-align:right">${fmtPln(totals.netTotal)}</td></tr>
-    <tr><td>${escapeHtml(totals.vatSummaryLabel)}</td><td style="text-align:right">${fmtPln(totals.vatTotal)}</td></tr>
-    ${discountRow}
-    ${subsidyRow}
-  </table>
-  <div class="gross">
-    <span>DO ZAPŁATY BRUTTO</span>
-    <span>${fmtPln(cfg.subsidyEnabled || cfg.discountEnabled ? totals.finalCost : totals.grossTotal)}</span>
+<div class="totals-row">
+  <div class="warranty">
+    <h3>Gwarancja</h3>
+    <p>
+      Na wykonane prace montażowe udzielamy <b>10-letniej gwarancji</b>. Producenci materiałów
+      pokryciowych zapewniają gwarancję materiałową <b>do 40 lat</b>. Instalacja fotowoltaiczna
+      objęta jest osobną gwarancją producenta paneli oraz falownika (do 25 lat).
+    </p>
   </div>
-  <table>${installmentRow}</table>
-  ${
-    totals.isSubsidyExcluded
-      ? `<div style="margin-top:8px;padding:8px;background:#fef2f2;color:#991b1b;font-size:11px;border-radius:6px">Uwaga: podany kod pocztowy (${escapeHtml(cfg.postalCode || "")}) jest wykluczony z dotacji regionalnej.</div>`
-      : ""
-  }
+  <div class="summary">
+    <table>
+      <tr>
+        <td class="label">Razem netto</td>
+        <td class="value">${fmtPln(totals.netTotal)}</td>
+      </tr>
+      <tr class="muted">
+        <td class="label">${escapeHtml(totals.vatSummaryLabel)}</td>
+        <td class="value">${fmtPln(totals.vatTotal)}</td>
+      </tr>
+    </table>
+    <div class="gross">
+      <span class="label">Do zapłaty brutto</span>
+      <span class="amount">${fmtPln(totals.grossTotal)}</span>
+    </div>
+    ${
+      showDiscount
+        ? `<table>
+            <tr class="discount">
+              <td class="label">Rabat</td>
+              <td class="value">− ${fmtPln(cfg.discount)}</td>
+            </tr>
+            <tr>
+              <td class="label">Cena po rabacie</td>
+              <td class="value">${fmtPln(totals.afterDiscount)}</td>
+            </tr>
+          </table>`
+        : ""
+    }
+    ${
+      showSubsidy
+        ? `<table>
+            <tr class="discount">
+              <td class="label">Dotacja</td>
+              <td class="value">− ${fmtPln(cfg.subsidy)}</td>
+            </tr>
+          </table>
+          <div class="final">
+            <span class="label">Koszt końcowy klienta</span>
+            <span class="amount">${fmtPln(totals.finalCost)}</span>
+          </div>`
+        : !showDiscount
+        ? ""
+        : `<div class="final">
+            <span class="label">Koszt końcowy klienta</span>
+            <span class="amount">${fmtPln(totals.finalCost)}</span>
+          </div>`
+    }
+    ${
+      showInstallment
+        ? `<div class="installment">
+            <div>
+              <div class="label">Eko-Abonament — rata mies.</div>
+              <div class="sublabel">${escapeHtml(rrsoLabel)} · ${cfg.months} m-cy</div>
+            </div>
+            <div>
+              <span class="amount">${fmtPln(totals.monthlyInstallment!)}</span><span class="mo"> /mc</span>
+            </div>
+          </div>`
+        : ""
+    }
+    ${
+      totals.isSubsidyExcluded
+        ? `<div class="notice">Uwaga: podany kod pocztowy (${escapeHtml(cfg.postalCode || "")}) jest wykluczony z dotacji regionalnej.</div>`
+        : ""
+    }
+  </div>
 </div>
 
-<div class="foot">
-  Oferta ma charakter informacyjny i nie stanowi oferty handlowej w rozumieniu art. 66 §1 KC.
+<div class="footer">
+  Oferta ma charakter informacyjny i nie stanowi oferty handlowej w rozumieniu art. 66 §1 Kodeksu Cywilnego.<br/>
+  Finalne warunki współpracy ustalane są indywidualnie w umowie.
+</div>
+
 </div>
 </body>
 </html>`;

@@ -15,6 +15,7 @@ import { useAuth } from "../src/lib/auth";
 import { colors, spacing, radius } from "../src/theme";
 import { Button } from "../src/components/Button";
 import { Field } from "../src/components/Field";
+import { BrandLogo } from "../src/components/BrandLogo";
 import { formatApiError } from "../src/lib/api";
 
 const QUICK_ACCOUNTS: { label: string; email: string; color: string }[] = [
@@ -60,10 +61,9 @@ export default function Login() {
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
           <View style={styles.brandWrap}>
-            <View style={styles.logoCircle}>
-              <Feather name="sun" size={34} color={colors.primary} />
+            <View style={styles.logoCard}>
+              <BrandLogo height={46} testID="login-brand-logo" />
             </View>
-            <Text style={styles.brand}>GRUPA OZE</Text>
             <Text style={styles.tagline}>CRM · Centrum Dowodzenia D2D</Text>
           </View>
 
@@ -131,7 +131,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   scroll: { flexGrow: 1, padding: spacing.lg, justifyContent: "center" },
   brandWrap: { alignItems: "center", marginBottom: spacing.xl },
-  logoCircle: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.inverted, alignItems: "center", justifyContent: "center", marginBottom: 12 },
+  logoCard: { backgroundColor: colors.paper, paddingHorizontal: 20, paddingVertical: 14, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border, marginBottom: 12 },
   brand: { fontSize: 28, fontWeight: "900", letterSpacing: -1, color: colors.textPrimary },
   tagline: { fontSize: 13, color: colors.textSecondary, marginTop: 4, letterSpacing: 0.5 },
   card: { backgroundColor: colors.paper, padding: spacing.lg, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border },

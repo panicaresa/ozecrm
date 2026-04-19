@@ -380,6 +380,60 @@ class TestLeads:
         assert updated_lead_found is not None
         assert updated_lead_found["status"] == new_status
 
+    def test_update_lead_note(self, api_client, rep_token):
+        """PATCH /api/leads/{id} updates lead note (Phase 1.1 regression)"""
+        # Get a lead
+        get_response = api_client.get(
+            f"{BASE_URL}/api/leads",
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        leads = get_response.json()
+        
+        if len(leads) == 0:
+            pytest.skip("No leads available to update")
+        
+        lead_id = leads[0]["id"]
+        test_note = "TEST_Phase 1.1 note update - handlowiec can edit notes"
+        
+        # Update note
+        patch_response = api_client.patch(
+            f"{BASE_URL}/api/leads/{lead_id}",
+            json={"note": test_note},
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        assert patch_response.status_code == 200, f"Expected 200, got {patch_response.status_code}: {patch_response.text}"
+        
+        updated_lead = patch_response.json()
+        assert updated_lead["note"] == test_note, f"Expected note='{test_note}', got '{updated_lead.get('note')}'"
+        
+        # Verify persistence
+        verify_response = api_client.get(
+            f"{BASE_URL}/api/leads",
+            headers={"Authorization": f"Bearer {rep_token}"}
+        )
+        verify_leads = verify_response.json()
+        updated_lead_found = next((l for l in verify_leads if l["id"] == lead_id), None)
+        assert updated_lead_found is not None
+        assert updated_lead_found["note"] == test_note
+
+    def test_manager_dashboard_status_breakdown(self, api_client, manager_token):
+        """GET /api/dashboard/manager returns status_breakdown that reflects lead status changes (Phase 1.1 regression)"""
+        # This test verifies that when a handlowiec updates a lead status, the manager dashboard reflects it
+        response = api_client.get(
+            f"{BASE_URL}/api/dashboard/manager",
+            headers={"Authorization": f"Bearer {manager_token}"}
+        )
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.text}"
+        
+        data = response.json()
+        assert "status_breakdown" in data
+        
+        # Verify all 5 statuses are present
+        expected_statuses = ["podpisana", "decyzja", "umowione", "nie_zainteresowany", "nowy"]
+        for status in expected_statuses:
+            assert status in data["status_breakdown"], f"Missing status '{status}' in status_breakdown"
+            assert isinstance(data["status_breakdown"][status], int), f"Status '{status}' count should be an integer"
+
 
 # ============ USERS TESTS ============
 class TestUsers:
