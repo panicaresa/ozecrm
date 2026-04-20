@@ -437,6 +437,8 @@ const styles = StyleSheet.create({
   metaRow: { flexDirection: "row", gap: 6, marginTop: 6, flexWrap: "wrap" },
   metaChip: { fontSize: 10, color: colors.textSecondary, backgroundColor: colors.zinc100, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, fontWeight: "700" },
   countdown: { fontSize: 11, color: colors.info, marginTop: 6, fontWeight: "800" },
+  correctionRow: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 5, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 4, backgroundColor: "#FEF3C7", alignSelf: "flex-start" },
+  correctionText: { color: "#92400E", fontSize: 10, fontWeight: "800" },
   commissionCap: { fontSize: 9, color: colors.textSecondary, fontWeight: "800", letterSpacing: 1 },
   commissionAmount: { fontSize: 16, fontWeight: "900", fontVariant: ["tabular-nums"] },
   commissionSub: { fontSize: 10, color: colors.textSecondary, fontWeight: "700", marginTop: 1 },

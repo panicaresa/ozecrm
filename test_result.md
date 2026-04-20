@@ -458,10 +458,67 @@ frontend:
           pokryciowych zapewniają gwarancję materiałową do 40 lat." (with <b> around "10-letniej
           gwarancji" and "do 40 lat"). Existing page-break-inside:avoid CSS rules preserved.
 
+  - task: "Contract corrections (additional_costs + admin-only)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Phase 1.8 admin corrections on contracts tested via /app/backend_test_phase18.py.
+          All 66 assertions PASS.
+          PATCH /api/contracts/{id} with additional_costs + additional_costs_note:
+            - admin OK (200); effective_margin = global_margin - additional_costs ✅
+            - commission_total = commission_percent/100 * effective_margin (verified 6000→5000) ✅
+            - commission_total_original unchanged and equals original commission_amount ✅
+            - manager → 403 (admin-only for these fields) ✅
+            - handlowiec → 403 ✅
+            - additional_costs=-100 → 400 Bad Request ✅
+            - additional_costs=0 & note="" → corrections cleared; commission_total reverts ✅
+          Dynamic 14d logic WITH corrections (signed 20d ago, credit, gm=10000, pct=50):
+            - Initial: status=payable, commission_released=5000 ✅
+            - additional_costs=4000 → commission_total=3000, released=3000, original=5000 ✅
+            - additional_costs=0 → commission_released back to 5000 ✅
+          Finance v2 reflects corrections:
+            - GET /api/dashboard/finance-v2 as admin returns corrected contract with
+              commission_total reduced (10000-2500 → 3750) and additional_costs=2500 ✅
+          PATCH /api/contracts/{id} total_paid_amount (cash contracts):
+            - admin → 200 ✅
+            - manager (own team rep) → 200 ✅
+            - handlowiec → 403 (endpoint requires admin/manager role) ✅
+          Cleanup: all test-created contracts, leads, and the temporary user were deleted.
+
+  - task: "GET /api/contracts/{id}"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Phase 1.8 GET /api/contracts/{id} verified (/app/backend_test_phase18.py):
+          - admin, manager (owning rep), handlowiec (rep_id==self) → all 200 ✅
+          - Response contains all required fields: id, lead_id, client_name, rep_id,
+            signed_at, gross_amount, global_margin, commission_percent, commission_amount,
+            commission_total, commission_total_original, effective_margin, additional_costs,
+            additional_costs_note, commission_released, commission_frozen, paid_pct,
+            release_date, days_until_release, status ✅
+          - Separate rep (no link to manager) + lead/contract → handlowiec@ GET → 403 ✅
+          - GET /api/contracts/nonexistent-xyz → 404 ✅
+          Regression: POST /api/auth/login (3 roles), GET /api/auth/me, GET /api/settings
+          (3 roles) all still 200 ✅.
+
 metadata:
   created_by: "main_agent"
-  version: "1.7"
-  test_sequence: 5
+  version: "1.8"
+  test_sequence: 7
   run_ui: false
 
 test_plan:
@@ -471,6 +528,34 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+  - agent: "testing"
+    message: |
+      Phase 1.8 backend testing COMPLETE — /app/backend_test_phase18.py, 66/66 assertions PASS.
+
+      ✅ GET /api/contracts/{id}:
+        - All 20 required fields present (incl. commission_total, commission_total_original,
+          effective_margin, additional_costs, additional_costs_note, release_date, etc.)
+        - Role scope: admin 200, manager (owning rep) 200, handlowiec (own) 200
+        - Cross-team access → 403; nonexistent ID → 404
+      ✅ PATCH /api/contracts/{id} admin-only corrections:
+        - admin applies additional_costs=2000 + note → effective_margin=gm-2000,
+          commission_total = pct/100*effective, commission_total_original unchanged
+        - manager → 403, handlowiec → 403 (admin-only on these fields)
+        - additional_costs<0 → 400
+        - Clearing via additional_costs=0/note="" reverts commission_total
+      ✅ PATCH payment (cash contracts):
+        - admin 200, manager (own team) 200, handlowiec 403 (endpoint admin+manager only)
+      ✅ Dynamic 14-day logic with corrections:
+        - signed 20d ago, credit, gm=10000, pct=50 → status=payable, released=5000
+        - additional_costs=4000 → commission_total=3000, released=3000, original=5000
+        - revert additional_costs=0 → released back to 5000
+      ✅ Finance v2 reflects corrections:
+        - contracts_all entry shows reduced commission_total (3750) and additional_costs=2500
+      ✅ Regression: auth/login (3 roles), /auth/me (3 roles), /settings (3 roles) all 200
+      ✅ Test artifacts cleaned up (contracts/leads/temp user deleted).
+
+      No blockers, no new bugs. Both focus tasks marked working=true.
+
   - agent: "main"
     message: |
       Implemented Phase 1.5: Commission Calculator widget (Admin/Manager/Rep dashboards),

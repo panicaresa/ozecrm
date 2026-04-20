@@ -229,8 +229,10 @@ class ContractIn(BaseModel):
 class ContractUpdate(BaseModel):
     total_paid_amount: Optional[float] = None
     note: Optional[str] = None
-    # admin/manager can cancel contract via separate endpoint or set cancelled flag here
     cancelled: Optional[bool] = None
+    # Admin-only corrections (Faza 1.8): reduce margin by unforeseen costs
+    additional_costs: Optional[float] = None
+    additional_costs_note: Optional[str] = None
 
 
 @api.post("/auth/login")
@@ -878,7 +880,17 @@ def _compute_contract_status(c: Dict[str, Any], now_dt: Optional[datetime] = Non
     signed_at = _parse_iso_dt(c.get("signed_at")) or _parse_iso_dt(c.get("created_at")) or now_dt
     deadline = signed_at + timedelta(days=WITHDRAWAL_DAYS)
 
-    commission_total = float(c.get("commission_amount") or 0.0)
+    # Faza 1.8: admin corrections (additional_costs) reduce the effective margin
+    original_margin = float(c.get("global_margin") or 0.0)
+    additional_costs = float(c.get("additional_costs") or 0.0)
+    effective_margin = max(0.0, round(original_margin - additional_costs, 2))
+    commission_pct = float(c.get("commission_percent") or 0.0)
+    effective_commission_total = round((commission_pct / 100.0) * effective_margin, 2)
+    # Preserve the original commission that was snapshotted at contract creation, for audit
+    commission_total_original = float(c.get("commission_amount") or 0.0)
+    # If admin corrections are present, "commission_total" displayed in UI reflects the effective one
+    commission_total = effective_commission_total if additional_costs > 0 else commission_total_original
+
     gross = float(c.get("gross_amount") or 0.0)
     paid = float(c.get("total_paid_amount") or 0.0)
     financing = c.get("financing_type") or "credit"
@@ -888,6 +900,10 @@ def _compute_contract_status(c: Dict[str, Any], now_dt: Optional[datetime] = Non
         return {
             "status": "cancelled",
             "commission_total": commission_total,
+            "commission_total_original": commission_total_original,
+            "effective_margin": effective_margin,
+            "additional_costs": additional_costs,
+            "additional_costs_note": c.get("additional_costs_note"),
             "commission_released": 0.0,
             "commission_frozen": 0.0,
             "paid_pct": 0.0,
@@ -902,6 +918,10 @@ def _compute_contract_status(c: Dict[str, Any], now_dt: Optional[datetime] = Non
         return {
             "status": "frozen",
             "commission_total": commission_total,
+            "commission_total_original": commission_total_original,
+            "effective_margin": effective_margin,
+            "additional_costs": additional_costs,
+            "additional_costs_note": c.get("additional_costs_note"),
             "commission_released": 0.0,
             "commission_frozen": round(commission_total, 2),
             "paid_pct": 0.0 if gross <= 0 else round(min(1.0, paid / gross) * 100, 1),
@@ -914,6 +934,10 @@ def _compute_contract_status(c: Dict[str, Any], now_dt: Optional[datetime] = Non
         return {
             "status": "payable",
             "commission_total": commission_total,
+            "commission_total_original": commission_total_original,
+            "effective_margin": effective_margin,
+            "additional_costs": additional_costs,
+            "additional_costs_note": c.get("additional_costs_note"),
             "commission_released": round(commission_total, 2),
             "commission_frozen": 0.0,
             "paid_pct": 100.0,
@@ -936,6 +960,10 @@ def _compute_contract_status(c: Dict[str, Any], now_dt: Optional[datetime] = Non
     return {
         "status": status,
         "commission_total": commission_total,
+        "commission_total_original": commission_total_original,
+        "effective_margin": effective_margin,
+        "additional_costs": additional_costs,
+        "additional_costs_note": c.get("additional_costs_note"),
         "commission_released": released,
         "commission_frozen": frozen,
         "paid_pct": round(pct * 100, 1),
@@ -1068,6 +1096,16 @@ async def update_contract(contract_id: str, body: ContractUpdate, user: Dict[str
         updates["note"] = body.note
     if body.cancelled is not None:
         updates["cancelled"] = bool(body.cancelled)
+    # Faza 1.8: admin-only corrections
+    if body.additional_costs is not None or body.additional_costs_note is not None:
+        if user["role"] != "admin":
+            raise HTTPException(status_code=403, detail="Only admin can set additional_costs corrections")
+        if body.additional_costs is not None:
+            if body.additional_costs < 0:
+                raise HTTPException(status_code=400, detail="additional_costs must be >= 0")
+            updates["additional_costs"] = round(float(body.additional_costs), 2)
+        if body.additional_costs_note is not None:
+            updates["additional_costs_note"] = body.additional_costs_note
     if not updates:
         raise HTTPException(status_code=400, detail="Nothing to update")
     updates["updated_at"] = now()
@@ -1076,6 +1114,24 @@ async def update_contract(contract_id: str, body: ContractUpdate, user: Dict[str
     u = await db.users.find_one({"id": updated.get("rep_id")}, {"_id": 0, "password_hash": 0}) if updated.get("rep_id") else None
     name = (u.get("name") or u.get("email")) if u else None
     return _serialize_contract(updated, rep_name=name)
+
+
+@api.get("/contracts/{contract_id}")
+async def get_contract(contract_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    c = await db.contracts.find_one({"id": contract_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(status_code=404, detail="Contract not found")
+    # scope
+    if user["role"] == "handlowiec" and c.get("rep_id") != user["id"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if user["role"] == "manager":
+        reps = await db.users.find({"manager_id": user["id"]}, {"id": 1, "_id": 0}).to_list(500)
+        rep_ids = {r["id"] for r in reps} | {user["id"]}
+        if c.get("owner_manager_id") != user["id"] and c.get("rep_id") not in rep_ids:
+            raise HTTPException(status_code=403, detail="Forbidden")
+    u = await db.users.find_one({"id": c.get("rep_id")}, {"_id": 0, "password_hash": 0}) if c.get("rep_id") else None
+    name = (u.get("name") or u.get("email")) if u else None
+    return _serialize_contract(c, rep_name=name)
 
 
 @api.delete("/contracts/{contract_id}")

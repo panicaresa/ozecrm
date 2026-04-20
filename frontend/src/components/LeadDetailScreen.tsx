@@ -152,28 +152,17 @@ export const LeadDetailScreen: React.FC<{ leadId: string; backLabel?: string }> 
     try {
       await api.post(`/leads/${leadId}/documents`, { type, data_base64, filename, mime });
       await loadDocs();
-      // Po wgraniu skanu UMOWY → przekieruj na formularz z danymi finansowymi (OBOWIĄZKOWY)
+      // Po wgraniu skanu UMOWY → natychmiastowe przekierowanie na formularz danych finansowych.
       if (type === "umowa" && lead) {
-        Alert.alert(
-          "Skan wgrany",
-          "Uzupełnij teraz dane finansowe umowy, aby zasiliła moduł Finanse (Cena brutto, Marża, Typ finansowania).",
-          [
-            {
-              text: "Dodaj dane umowy",
-              onPress: () =>
-                router.push({
-                  pathname: "/(rep)/add-contract",
-                  params: {
-                    leadId: lead.id,
-                    clientName: lead.client_name,
-                    area: lead.building_area ? String(lead.building_area) : "",
-                    buildingType: lead.building_type || "mieszkalny",
-                  },
-                } as any),
-            },
-            { text: "Później", style: "cancel" },
-          ]
-        );
+        router.push({
+          pathname: "/(rep)/add-contract",
+          params: {
+            leadId: lead.id,
+            clientName: lead.client_name,
+            area: lead.building_area ? String(lead.building_area) : "",
+            buildingType: lead.building_type || "mieszkalny",
+          },
+        } as any);
       }
     } catch (e) {
       Alert.alert("Błąd przesyłania", formatApiError(e));
