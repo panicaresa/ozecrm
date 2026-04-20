@@ -369,7 +369,7 @@ async def update_lead(lead_id: str, body: LeadUpdate, user: Dict[str, Any] = Dep
         rep_ids = {r["id"] for r in reps} | {user["id"]}
         if lead.get("owner_manager_id") != user["id"] and lead.get("assigned_to") not in rep_ids:
             raise HTTPException(status_code=403, detail="Not your team's lead")
-    updates = {k: v for k, v in body.dict(exclude_unset=True).items() if v is not None}
+    updates = body.dict(exclude_unset=True)
     if "status" in updates and updates["status"] not in LEAD_STATUSES:
         raise HTTPException(status_code=400, detail="Invalid status")
     updates["updated_at"] = now()
