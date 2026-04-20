@@ -146,6 +146,7 @@ class LeadIn(BaseModel):
     building_area: Optional[float] = None
     building_type: Optional[str] = None
     assigned_to: Optional[str] = None
+    meeting_at: Optional[str] = None  # ISO datetime for "umowione" status
 
 
 class LeadUpdate(BaseModel):
@@ -161,6 +162,7 @@ class LeadUpdate(BaseModel):
     building_area: Optional[float] = None
     building_type: Optional[str] = None
     assigned_to: Optional[str] = None
+    meeting_at: Optional[str] = None
 
 
 class SettingsIn(BaseModel):
@@ -201,6 +203,34 @@ class RepLocationIn(BaseModel):
     accuracy: Optional[float] = None
     battery: Optional[float] = None  # 0..1
     battery_state: Optional[str] = None  # charging|unplugged|full|unknown
+
+
+# --- Contracts (Faza 1.7) ---
+FINANCING_TYPES = ("credit", "cash")
+WITHDRAWAL_DAYS = 14
+
+
+class ContractIn(BaseModel):
+    lead_id: str
+    signed_at: str  # ISO date or datetime
+    buildings_count: int = 1
+    building_type: str  # mieszkalny | gospodarczy
+    roof_area_m2: float
+    gross_amount: float  # cena brutto umowy w PLN
+    global_margin: float  # marża PLN — bazowa do liczenia prowizji
+    financing_type: str  # credit | cash
+    down_payment_amount: Optional[float] = None  # jeśli cash
+    installments_count: Optional[int] = None  # jeśli cash
+    total_paid_amount: Optional[float] = 0.0  # jeśli cash - początkowo ~= down_payment
+    note: Optional[str] = None
+    commission_percent_override: Optional[float] = None
+
+
+class ContractUpdate(BaseModel):
+    total_paid_amount: Optional[float] = None
+    note: Optional[str] = None
+    # admin/manager can cancel contract via separate endpoint or set cancelled flag here
+    cancelled: Optional[bool] = None
 
 
 @api.post("/auth/login")
@@ -821,6 +851,350 @@ async def finance_dashboard(user: Dict[str, Any] = Depends(get_current_user)):
     }
 
 
+# --------------------------------------------------------------------------------------
+# Contracts (Faza 1.7) — real signed contracts drive the Finance module
+# Dynamic 14-day rule: no cron job. Status is computed on every read by comparing
+# signed_at + 14 days to datetime.now(tz=utc). Raw facts are persisted
+# (signed_at, financing_type, total_paid_amount, gross_amount); commission_status
+# is derived.
+# --------------------------------------------------------------------------------------
+def _parse_iso_dt(v: Any) -> Optional[datetime]:
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+    if isinstance(v, str):
+        try:
+            s = v.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(s)
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            return None
+    return None
+
+
+def _compute_contract_status(c: Dict[str, Any], now_dt: Optional[datetime] = None) -> Dict[str, Any]:
+    now_dt = now_dt or now()
+    signed_at = _parse_iso_dt(c.get("signed_at")) or _parse_iso_dt(c.get("created_at")) or now_dt
+    deadline = signed_at + timedelta(days=WITHDRAWAL_DAYS)
+
+    commission_total = float(c.get("commission_amount") or 0.0)
+    gross = float(c.get("gross_amount") or 0.0)
+    paid = float(c.get("total_paid_amount") or 0.0)
+    financing = c.get("financing_type") or "credit"
+    cancelled = bool(c.get("cancelled"))
+
+    if cancelled:
+        return {
+            "status": "cancelled",
+            "commission_total": commission_total,
+            "commission_released": 0.0,
+            "commission_frozen": 0.0,
+            "paid_pct": 0.0,
+            "release_date": deadline.isoformat(),
+            "days_until_release": 0,
+            "is_cancelled": True,
+        }
+
+    days_until_release = max(0, (deadline - now_dt).days)
+
+    if now_dt < deadline:
+        return {
+            "status": "frozen",
+            "commission_total": commission_total,
+            "commission_released": 0.0,
+            "commission_frozen": round(commission_total, 2),
+            "paid_pct": 0.0 if gross <= 0 else round(min(1.0, paid / gross) * 100, 1),
+            "release_date": deadline.isoformat(),
+            "days_until_release": days_until_release,
+            "is_cancelled": False,
+        }
+
+    if financing == "credit":
+        return {
+            "status": "payable",
+            "commission_total": commission_total,
+            "commission_released": round(commission_total, 2),
+            "commission_frozen": 0.0,
+            "paid_pct": 100.0,
+            "release_date": deadline.isoformat(),
+            "days_until_release": 0,
+            "is_cancelled": False,
+        }
+    if gross <= 0:
+        pct = 0.0
+    else:
+        pct = max(0.0, min(1.0, paid / gross))
+    released = round(commission_total * pct, 2)
+    frozen = round(commission_total - released, 2)
+    if pct >= 0.9999:
+        status = "payable"
+    elif pct > 0:
+        status = "partial"
+    else:
+        status = "frozen"
+    return {
+        "status": status,
+        "commission_total": commission_total,
+        "commission_released": released,
+        "commission_frozen": frozen,
+        "paid_pct": round(pct * 100, 1),
+        "release_date": deadline.isoformat(),
+        "days_until_release": 0,
+        "is_cancelled": False,
+    }
+
+
+def _serialize_contract(c: Dict[str, Any], rep_name: Optional[str] = None) -> Dict[str, Any]:
+    derived = _compute_contract_status(c)
+    return {
+        "id": c.get("id"),
+        "lead_id": c.get("lead_id"),
+        "client_name": c.get("client_name"),
+        "rep_id": c.get("rep_id"),
+        "rep_name": rep_name or c.get("rep_name"),
+        "owner_manager_id": c.get("owner_manager_id"),
+        "signed_at": iso(c.get("signed_at")),
+        "created_at": iso(c.get("created_at")),
+        "updated_at": iso(c.get("updated_at")),
+        "buildings_count": c.get("buildings_count", 1),
+        "building_type": c.get("building_type"),
+        "roof_area_m2": c.get("roof_area_m2"),
+        "gross_amount": c.get("gross_amount"),
+        "global_margin": c.get("global_margin"),
+        "financing_type": c.get("financing_type"),
+        "down_payment_amount": c.get("down_payment_amount"),
+        "installments_count": c.get("installments_count"),
+        "total_paid_amount": c.get("total_paid_amount") or 0.0,
+        "commission_percent": c.get("commission_percent"),
+        "commission_amount": c.get("commission_amount"),
+        "note": c.get("note"),
+        "cancelled": bool(c.get("cancelled")),
+        **derived,
+    }
+
+
+async def _contract_scope_query(user: Dict[str, Any]) -> Dict[str, Any]:
+    if user["role"] == "admin":
+        return {}
+    if user["role"] == "manager":
+        reps = await db.users.find({"manager_id": user["id"]}, {"id": 1, "_id": 0}).to_list(500)
+        rep_ids = [r["id"] for r in reps] + [user["id"]]
+        return {"$or": [{"rep_id": {"$in": rep_ids}}, {"owner_manager_id": user["id"]}]}
+    return {"rep_id": user["id"]}
+
+
+@api.post("/contracts")
+async def create_contract(body: ContractIn, user: Dict[str, Any] = Depends(get_current_user)):
+    if body.financing_type not in FINANCING_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid financing_type (credit|cash)")
+    if body.building_type not in ("mieszkalny", "gospodarczy"):
+        raise HTTPException(status_code=400, detail="Invalid building_type")
+    if body.roof_area_m2 <= 0 or body.gross_amount <= 0 or body.global_margin < 0:
+        raise HTTPException(status_code=400, detail="Invalid numeric fields")
+    lead = await _ensure_lead_access(body.lead_id, user)
+    settings_doc = await db.settings.find_one({"id": "global"}, {"_id": 0}) or {}
+    commission_pct = (
+        float(body.commission_percent_override)
+        if body.commission_percent_override is not None
+        else float(settings_doc.get("commission_percent") or 50.0)
+    )
+    commission_amount = round((commission_pct / 100.0) * float(body.global_margin), 2)
+    signed_at = _parse_iso_dt(body.signed_at) or now()
+    total_paid = float(body.total_paid_amount or 0.0)
+    if body.financing_type == "cash" and body.down_payment_amount is not None and total_paid <= 0:
+        total_paid = float(body.down_payment_amount)
+    contract_id = str(uuid.uuid4())
+    rep_id = lead.get("assigned_to") or (user["id"] if user["role"] == "handlowiec" else None)
+    owner_manager_id = lead.get("owner_manager_id")
+    doc = {
+        "id": contract_id,
+        "lead_id": body.lead_id,
+        "client_name": lead.get("client_name"),
+        "rep_id": rep_id,
+        "owner_manager_id": owner_manager_id,
+        "signed_at": signed_at,
+        "buildings_count": int(body.buildings_count or 1),
+        "building_type": body.building_type,
+        "roof_area_m2": float(body.roof_area_m2),
+        "gross_amount": float(body.gross_amount),
+        "global_margin": float(body.global_margin),
+        "financing_type": body.financing_type,
+        "down_payment_amount": float(body.down_payment_amount) if body.down_payment_amount is not None else None,
+        "installments_count": int(body.installments_count) if body.installments_count is not None else None,
+        "total_paid_amount": round(total_paid, 2),
+        "commission_percent": commission_pct,
+        "commission_amount": commission_amount,
+        "note": body.note,
+        "cancelled": False,
+        "created_by": user["id"],
+        "created_at": now(),
+        "updated_at": now(),
+    }
+    await db.contracts.insert_one(doc)
+    await db.leads.update_one({"id": body.lead_id}, {"$set": {"status": "podpisana", "updated_at": now()}})
+    return _serialize_contract(doc)
+
+
+@api.get("/contracts")
+async def list_contracts(user: Dict[str, Any] = Depends(get_current_user)):
+    q = await _contract_scope_query(user)
+    docs = await db.contracts.find(q, {"_id": 0}).sort("signed_at", -1).to_list(1000)
+    users_map = {u["id"]: u for u in await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(500)}
+    out = []
+    for c in docs:
+        u = users_map.get(c.get("rep_id"))
+        name = (u.get("name") or u.get("email")) if u else "—"
+        out.append(_serialize_contract(c, rep_name=name))
+    return out
+
+
+@api.patch("/contracts/{contract_id}")
+async def update_contract(contract_id: str, body: ContractUpdate, user: Dict[str, Any] = Depends(require_roles("admin", "manager"))):
+    c = await db.contracts.find_one({"id": contract_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(status_code=404, detail="Contract not found")
+    if user["role"] == "manager":
+        reps = await db.users.find({"manager_id": user["id"]}, {"id": 1, "_id": 0}).to_list(500)
+        rep_ids = {r["id"] for r in reps} | {user["id"]}
+        if c.get("owner_manager_id") != user["id"] and c.get("rep_id") not in rep_ids:
+            raise HTTPException(status_code=403, detail="Forbidden")
+    updates: Dict[str, Any] = {}
+    if body.total_paid_amount is not None:
+        if body.total_paid_amount < 0:
+            raise HTTPException(status_code=400, detail="total_paid_amount must be >= 0")
+        updates["total_paid_amount"] = round(float(body.total_paid_amount), 2)
+    if body.note is not None:
+        updates["note"] = body.note
+    if body.cancelled is not None:
+        updates["cancelled"] = bool(body.cancelled)
+    if not updates:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    updates["updated_at"] = now()
+    await db.contracts.update_one({"id": contract_id}, {"$set": updates})
+    updated = await db.contracts.find_one({"id": contract_id}, {"_id": 0})
+    u = await db.users.find_one({"id": updated.get("rep_id")}, {"_id": 0, "password_hash": 0}) if updated.get("rep_id") else None
+    name = (u.get("name") or u.get("email")) if u else None
+    return _serialize_contract(updated, rep_name=name)
+
+
+@api.delete("/contracts/{contract_id}")
+async def delete_contract(contract_id: str, admin: Dict[str, Any] = Depends(require_roles("admin"))):
+    res = await db.contracts.delete_one({"id": contract_id})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Contract not found")
+    return {"ok": True}
+
+
+# --- Calendar ---
+@api.get("/calendar/meetings")
+async def list_meetings(user: Dict[str, Any] = Depends(get_current_user)):
+    if user["role"] == "admin":
+        q: Dict[str, Any] = {"status": "umowione", "meeting_at": {"$ne": None}}
+    elif user["role"] == "manager":
+        reps = await db.users.find({"manager_id": user["id"]}, {"id": 1, "_id": 0}).to_list(500)
+        rep_ids = [r["id"] for r in reps] + [user["id"]]
+        q = {"status": "umowione", "meeting_at": {"$ne": None}, "$or": [{"assigned_to": {"$in": rep_ids}}, {"owner_manager_id": user["id"]}]}
+    else:
+        q = {"status": "umowione", "meeting_at": {"$ne": None}, "assigned_to": user["id"]}
+    leads = await db.leads.find(q, {"_id": 0}).to_list(1000)
+    users_map = {u["id"]: u for u in await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(500)}
+    out = []
+    for l in leads:
+        rep = users_map.get(l.get("assigned_to"))
+        out.append({
+            "lead_id": l.get("id"),
+            "client_name": l.get("client_name"),
+            "phone": l.get("phone"),
+            "address": l.get("address"),
+            "meeting_at": l.get("meeting_at"),
+            "latitude": l.get("latitude"),
+            "longitude": l.get("longitude"),
+            "rep_id": l.get("assigned_to"),
+            "rep_name": (rep.get("name") or rep.get("email")) if rep else "—",
+            "note": l.get("note"),
+        })
+    out.sort(key=lambda x: (x["meeting_at"] or ""))
+    return out
+
+
+# --- Finance v2: contracts-based ---
+@api.get("/dashboard/finance-v2")
+async def finance_dashboard_v2(user: Dict[str, Any] = Depends(get_current_user)):
+    q = await _contract_scope_query(user)
+    settings_doc = await db.settings.find_one({"id": "global"}, {"_id": 0}) or {}
+    contracts_raw = await db.contracts.find(q, {"_id": 0}).to_list(5000)
+    users_map = {u["id"]: u for u in await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(500)}
+    month_start, month_end = _month_bounds()
+    contracts_all = []
+    contracts_month = []
+    for c in contracts_raw:
+        rep = users_map.get(c.get("rep_id"))
+        name = (rep.get("name") or rep.get("email")) if rep else "—"
+        entry = _serialize_contract(c, rep_name=name)
+        contracts_all.append(entry)
+        signed = _parse_iso_dt(c.get("signed_at"))
+        if signed and month_start <= signed < month_end:
+            contracts_month.append(entry)
+
+    def _sum(items, key):
+        return round(sum(float(i.get(key) or 0) for i in items), 2)
+
+    frozen_all = [c for c in contracts_all if c["status"] == "frozen"]
+    partial_all = [c for c in contracts_all if c["status"] == "partial"]
+    payable_all = [c for c in contracts_all if c["status"] == "payable"]
+
+    by_rep: Dict[str, Dict[str, Any]] = {}
+    for c in contracts_month:
+        rid = c.get("rep_id") or "_unassigned"
+        if rid not in by_rep:
+            by_rep[rid] = {
+                "rep_id": rid,
+                "rep_name": c.get("rep_name") or "—",
+                "signed_count": 0,
+                "commission_payable_sum": 0.0,
+                "commission_frozen_sum": 0.0,
+                "margin_sum": 0.0,
+                "brutto_sum": 0.0,
+            }
+        by_rep[rid]["signed_count"] += 1
+        by_rep[rid]["commission_payable_sum"] = round(by_rep[rid]["commission_payable_sum"] + (c.get("commission_released") or 0), 2)
+        by_rep[rid]["commission_frozen_sum"] = round(by_rep[rid]["commission_frozen_sum"] + (c.get("commission_frozen") or 0), 2)
+        by_rep[rid]["margin_sum"] = round(by_rep[rid]["margin_sum"] + (c.get("global_margin") or 0), 2)
+        by_rep[rid]["brutto_sum"] = round(by_rep[rid]["brutto_sum"] + (c.get("gross_amount") or 0), 2)
+
+    return {
+        "period": {"month_start": iso(month_start), "month_end": iso(month_end)},
+        "settings_snapshot": {
+            "commission_percent": settings_doc.get("commission_percent"),
+            "withdrawal_days": WITHDRAWAL_DAYS,
+        },
+        "totals_month": {
+            "signed_count": len(contracts_month),
+            "commission_payable_sum": _sum(contracts_month, "commission_released"),
+            "commission_frozen_sum": _sum(contracts_month, "commission_frozen"),
+            "commission_total_sum": _sum(contracts_month, "commission_total"),
+            "margin_sum": _sum(contracts_month, "global_margin"),
+            "brutto_sum": _sum(contracts_month, "gross_amount"),
+        },
+        "totals_all_time": {
+            "signed_count": len(contracts_all),
+            "commission_payable_sum": _sum(contracts_all, "commission_released"),
+            "commission_frozen_sum": _sum(contracts_all, "commission_frozen"),
+            "commission_total_sum": _sum(contracts_all, "commission_total"),
+            "margin_sum": _sum(contracts_all, "global_margin"),
+            "brutto_sum": _sum(contracts_all, "gross_amount"),
+        },
+        "by_rep": sorted(by_rep.values(), key=lambda x: x["commission_payable_sum"], reverse=True),
+        "frozen_contracts": sorted(frozen_all, key=lambda x: x.get("release_date") or ""),
+        "partial_contracts": sorted(partial_all, key=lambda x: x.get("signed_at") or "", reverse=True),
+        "payable_contracts": sorted(payable_all, key=lambda x: x.get("signed_at") or "", reverse=True),
+        "contracts_month": sorted(contracts_month, key=lambda x: x.get("signed_at") or "", reverse=True),
+        "contracts_all": sorted(contracts_all, key=lambda x: x.get("signed_at") or "", reverse=True),
+    }
+
+
+
 
 async def seed_data():
     await db.users.create_index("email", unique=True)
@@ -829,6 +1203,9 @@ async def seed_data():
     await db.settings.create_index("id", unique=True)
     await db.goals.create_index([("user_id", 1), ("period", 1)], unique=True)
     await db.rep_locations.create_index("user_id", unique=True)
+    await db.contracts.create_index("rep_id")
+    await db.contracts.create_index("owner_manager_id")
+    await db.contracts.create_index("signed_at")
 
     existing_settings = await db.settings.find_one({"id": "global"})
     if not existing_settings:

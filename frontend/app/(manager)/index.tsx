@@ -307,7 +307,18 @@ export default function ManagerDashboard() {
         )}
 
         <TouchableOpacity
-          style={styles.viewAllBtn}
+          style={[styles.viewAllBtn, { backgroundColor: colors.primary }]}
+          onPress={() => router.push("/(manager)/calendar")}
+          testID="manager-calendar-button"
+          activeOpacity={0.8}
+        >
+          <Feather name="calendar" size={16} color={colors.textInverse} />
+          <Text style={styles.viewAllText}>Kalendarz spotkań zespołu</Text>
+          <Feather name="chevron-right" size={16} color={colors.textInverse} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.viewAllBtn, { marginTop: 10 }]}
           onPress={() => router.push("/(manager)/finance")}
           testID="manager-finance-button"
           activeOpacity={0.8}

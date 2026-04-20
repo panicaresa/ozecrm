@@ -176,6 +176,14 @@ export default function RepHome() {
             style={{ marginTop: 10 }}
           />
           <Button
+            title="Kalendarz spotkań"
+            variant="outline"
+            icon={<Feather name="calendar" size={18} color={colors.primary} />}
+            onPress={() => router.push("/(rep)/calendar")}
+            testID="rep-calendar-button"
+            style={{ marginTop: 10 }}
+          />
+          <Button
             title="Moje zarobki · Finanse"
             variant="secondary"
             icon={<Feather name="dollar-sign" size={18} color="#fff" />}

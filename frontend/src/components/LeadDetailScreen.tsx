@@ -45,6 +45,8 @@ export const LeadDetailScreen: React.FC<{ leadId: string; backLabel?: string }> 
   const [previewDoc, setPreviewDoc] = useState<{ id: string; mime: string; data: string } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [meetingAt, setMeetingAt] = useState<string>("");
+  const [savingMeeting, setSavingMeeting] = useState(false);
 
   const loadLead = useCallback(async () => {
     try {
@@ -53,6 +55,7 @@ export const LeadDetailScreen: React.FC<{ leadId: string; backLabel?: string }> 
       if (found) {
         setLead(found);
         setNote(found.note || "");
+        if (found.meeting_at) setMeetingAt(String(found.meeting_at).slice(0, 16));
       } else {
         setErr("Lead nie został znaleziony");
       }
@@ -101,6 +104,26 @@ export const LeadDetailScreen: React.FC<{ leadId: string; backLabel?: string }> 
       Alert.alert("Błąd", formatApiError(e));
     } finally {
       setSavingNote(false);
+    }
+  };
+
+  const saveMeeting = async () => {
+    if (!lead) return;
+    setSavingMeeting(true);
+    try {
+      // Normalize to ISO (accept YYYY-MM-DDTHH:mm) → append :00Z for server
+      let iso: string | null = null;
+      if (meetingAt && meetingAt.length >= 10) {
+        const s = meetingAt.includes("T") ? meetingAt : `${meetingAt}T09:00`;
+        iso = new Date(s).toISOString();
+      }
+      const res = await api.patch(`/leads/${lead.id}`, { meeting_at: iso });
+      setLead(res.data);
+      Alert.alert("Zapisano", iso ? "Data spotkania ustawiona — pojawi się w Kalendarzu." : "Data spotkania usunięta.");
+    } catch (e) {
+      Alert.alert("Błąd", formatApiError(e));
+    } finally {
+      setSavingMeeting(false);
     }
   };
 
@@ -316,6 +339,88 @@ export const LeadDetailScreen: React.FC<{ leadId: string; backLabel?: string }> 
             })}
           </View>
 
+          {/* Meeting date — visible when status is umowione */}
+          {lead.status === "umowione" && (
+            <View style={styles.meetingBox} testID="meeting-box">
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                <Feather name="calendar" size={14} color={colors.primary} />
+                <Text style={{ fontSize: 13, fontWeight: "900", color: colors.textPrimary }}>
+                  Data i godzina spotkania
+                </Text>
+              </View>
+              <Text style={styles.hintSmall}>Format: YYYY-MM-DDTHH:mm (np. 2026-04-25T14:30)</Text>
+              <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
+                <TouchableOpacity
+                  style={[styles.input, { flex: 1, justifyContent: "center" }]}
+                  onPress={() => {}}
+                  activeOpacity={1}
+                >
+                  <TextInput
+                    value={meetingAt}
+                    onChangeText={setMeetingAt}
+                    placeholder="2026-04-25T14:30"
+                    placeholderTextColor={colors.textSecondary}
+                    style={{ color: colors.textPrimary, fontWeight: "700", fontSize: 14 }}
+                    testID="meeting-input"
+                  />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.meetingSave}
+                  onPress={saveMeeting}
+                  disabled={savingMeeting}
+                  testID="save-meeting-button"
+                  activeOpacity={0.85}
+                >
+                  {savingMeeting ? <ActivityIndicator color="#fff" /> : <Feather name="check" size={16} color="#fff" />}
+                </TouchableOpacity>
+              </View>
+              <View style={{ flexDirection: "row", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                {[
+                  { label: "Dziś 14:00", offset: 0, hh: "14:00" },
+                  { label: "Jutro 10:00", offset: 1, hh: "10:00" },
+                  { label: "Za 3 dni 16:00", offset: 3, hh: "16:00" },
+                ].map((o) => (
+                  <TouchableOpacity
+                    key={o.label}
+                    style={styles.quickMeetingChip}
+                    onPress={() => {
+                      const d = new Date();
+                      d.setDate(d.getDate() + o.offset);
+                      setMeetingAt(`${d.toISOString().slice(0, 10)}T${o.hh}`);
+                    }}
+                  >
+                    <Text style={styles.quickMeetingText}>{o.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          )}
+
+          {/* CTA: Dodaj umowę — visible when status is podpisana or decyzja */}
+          {(lead.status === "podpisana" || lead.status === "decyzja" || lead.status === "umowione") && (
+            <TouchableOpacity
+              style={styles.contractCta}
+              activeOpacity={0.85}
+              onPress={() => router.push({
+                pathname: "/(rep)/add-contract",
+                params: {
+                  leadId: lead.id,
+                  clientName: lead.client_name,
+                  area: lead.building_area ? String(lead.building_area) : "",
+                  buildingType: lead.building_type || "mieszkalny",
+                },
+              } as any)}
+              testID="add-contract-button"
+            >
+              <Feather name="file-plus" size={18} color="#fff" />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.contractCtaTitle}>Dodaj umowę z danymi finansowymi</Text>
+                <Text style={styles.contractCtaSub}>Cena brutto, marża, finansowanie → zasili moduł Finanse</Text>
+              </View>
+              <Feather name="chevron-right" size={18} color="#fff" />
+            </TouchableOpacity>
+          )}
+
           {/* Dokumentacja */}
           <Text style={styles.section}>Dokumentacja</Text>
 
@@ -473,6 +578,16 @@ const styles = StyleSheet.create({
   docBlockTitle: { flex: 1, fontSize: 15, fontWeight: "800", color: colors.textPrimary },
   docCount: { fontSize: 11, color: colors.textSecondary, fontWeight: "700", backgroundColor: colors.zinc100, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999 },
   empty: { color: colors.textSecondary, fontSize: 12, fontStyle: "italic", marginBottom: 8 },
+  meetingBox: { backgroundColor: colors.paper, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.primary, marginBottom: 16 },
+  hintSmall: { fontSize: 11, color: colors.textSecondary, lineHeight: 15 },
+  input: { borderWidth: 1.5, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 12, backgroundColor: colors.bg },
+  meetingSave: { width: 48, height: 48, borderRadius: radius.md, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center" },
+  quickMeetingChip: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.bg },
+  quickMeetingText: { fontSize: 11, color: colors.textPrimary, fontWeight: "700" },
+  contractCta: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: colors.secondary, paddingHorizontal: 14, paddingVertical: 14, borderRadius: radius.md, marginBottom: 16 },
+  contractCtaTitle: { color: "#fff", fontSize: 14, fontWeight: "900" },
+  contractCtaSub: { color: "#DCFCE7", fontSize: 11, marginTop: 2, fontWeight: "600" },
+
   docRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 8, paddingHorizontal: 10, backgroundColor: colors.bg, borderRadius: radius.md, marginBottom: 6 },
   docName: { color: colors.textPrimary, fontSize: 13, fontWeight: "700" },
   docMeta: { color: colors.textSecondary, fontSize: 11, marginTop: 2 },

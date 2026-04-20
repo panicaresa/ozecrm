@@ -15,6 +15,8 @@ export interface Lead {
   building_type?: string;
   created_at?: string;
   assigned_to?: string;
+  note?: string;
+  meeting_at?: string | null;
 }
 
 export const LeadCard: React.FC<{ lead: Lead; onPress?: () => void; testID?: string }> = ({ lead, onPress, testID }) => {

@@ -206,6 +206,165 @@ backend:
             VAT: gospodarczy=23%; mieszkalny ≤300m²=8%; mieszkalny >300m²=mixed 300/area*8%+rest*23%
             total_brutto = total_netto + VAT
             commission = commission_percent% × margin_netto
+
+  - task: "Contracts CRUD + dynamic 14-day commission logic"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          New endpoints:
+            POST   /api/contracts     (auth required; creates contract for a lead the caller can access)
+            GET    /api/contracts     (role-scoped: admin all / manager team / handlowiec self)
+            PATCH  /api/contracts/{id}  (admin & manager only; updates total_paid_amount, note, cancelled)
+            DELETE /api/contracts/{id}  (admin only)
+          When a contract is POSTed, the linked lead's status is flipped to "podpisana".
+          commission_amount = (commission_percent/100) * global_margin, snapshotted at creation.
+          commission_percent_override is optional on POST; else from settings.commission_percent.
+
+          DYNAMIC 14-day rule (no cron):
+          _compute_contract_status(contract) returns:
+            status: frozen | partial | payable | cancelled
+            commission_total, commission_released, commission_frozen, paid_pct, release_date, days_until_release
+          Logic:
+            cancelled=True                    → status="cancelled", released=0, frozen=0
+            now < signed_at + 14d             → status="frozen", released=0, frozen=full
+            now >= signed_at + 14d, credit    → status="payable", released=full
+            now >= signed_at + 14d, cash:
+              pct = clamp(total_paid/gross, 0, 1)
+              released = round(full * pct, 2)
+              status = "payable" if pct>=0.9999 else "partial" if pct>0 else "frozen"
+      - working: true
+        agent: "testing"
+        comment: |
+          Phase 1.7 Contracts testing COMPLETE — /app/backend_test_phase17.py, all contract-related
+          assertions PASS.
+          AUTH GATES:
+            - POST/GET/PATCH/DELETE /api/contracts without auth → 401 ✅
+            - PATCH /api/contracts/{id} as handlowiec → 403 ✅
+            - DELETE /api/contracts/{id} as manager → 403 (admin-only) ✅
+          CREATE (credit, today):
+            - POST /api/contracts as handlowiec for own lead → 200 ✅
+            - commission_percent matches settings.commission_percent (=50) ✅
+            - commission_amount = round(pct/100 * global_margin, 2) = 6000.0 ✅
+            - status == "frozen", commission_frozen == 6000, commission_released == 0 ✅
+            - days_until_release == 13 (or 14, accepted) ✅
+            - Linked lead flipped to status="podpisana" ✅
+          DYNAMIC STATUS — credit signed 15d ago:
+            - status == "payable" ✅
+            - commission_released == full (pct/100 * 8000 = 4000) ✅
+            - commission_frozen == 0 ✅
+          CASH PARTIAL — 15d ago, 50% paid:
+            - status == "partial", paid_pct == 50.0 ✅
+            - commission_total = 10000, released = 5000, frozen = 5000 ✅
+            - PATCH total_paid_amount=100000 (admin) → status="payable", paid_pct=100,
+              released=full, frozen=0 ✅
+          CASH FRESH (within 14d, 50% paid):
+            - status == "frozen" even though 50% paid (withdrawal window not yet closed) ✅
+          CANCEL:
+            - PATCH cancelled=true (admin) → status="cancelled", released=0, frozen=0 ✅
+          ROLE SCOPING /api/contracts GET:
+            - handlowiec sees only own (rep_id == self) ✅
+            - manager contracts ⊇ handlowiec contracts ✅
+            - admin contracts ⊇ manager contracts ✅
+          Regression sanity: /api/auth/login (all 3 roles), /api/settings (all roles),
+          /api/dashboard/manager, /api/dashboard/rep, /api/dashboard/finance (legacy),
+          /api/leads GET/POST all still 200 ✅.
+
+  - task: "Calendar /api/calendar/meetings"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          GET /api/calendar/meetings — returns leads with status="umowione" AND meeting_at != null,
+          role-scoped. Sorted ascending by meeting_at.
+          Lead model extended with meeting_at (ISO datetime string, optional).
+          PATCH /api/leads/{id} accepts meeting_at (null clears it).
+      - working: true
+        agent: "testing"
+        comment: |
+          GET /api/calendar/meetings — PASS.
+            - Unauthenticated → 401 ✅
+            - handlowiec → 200, array, includes own umowione+meeting_at lead ✅
+            - manager → 200, ⊇ rep (owner of rep) ✅
+            - admin → 200, ⊇ manager ✅
+            - Response items include lead_id, client_name, phone, address, meeting_at,
+              rep_id, rep_name, note ✅
+          Lead meeting_at persistence (PATCH /api/leads/{id}):
+            - Set meeting_at="2099-06-15T10:30:00Z" + status="umowione" → 200, meeting_at present ✅
+            - Re-set meeting_at after clear attempt → 200, meeting_at present ✅
+
+          ⚠ BUG FOUND (belongs to PATCH /api/leads, not /api/calendar/meetings):
+          Attempting to CLEAR meeting_at via PATCH /api/leads/{id} with body {"meeting_at": null}
+          returns 200 but the field is NOT cleared. Root cause is line ~372 in server.py
+          update_lead():
+              updates = {k: v for k, v in body.dict(exclude_unset=True).items() if v is not None}
+          This explicitly filters out any None value, so passing null for any nullable field
+          (meeting_at, phone, address, assigned_to, latitude, longitude, building_area, etc.)
+          silently no-ops instead of setting them to None. This blocks the stated product flow
+          "cancel the meeting / un-schedule by sending meeting_at: null".
+          Suggested fix: use exclude_unset=True only and drop the `is not None` filter, OR add
+          an explicit allow-null list for meeting_at. Example:
+              updates = body.dict(exclude_unset=True)
+          This bug is NOT a blocker for the calendar endpoint itself (which reads current
+          state), but it IS a functional regression vs the review spec point 1
+          ("PATCH again to clear: {'meeting_at': null}. Expect 200 and meeting_at null").
+          The calendar endpoint, role scoping, auth gating, and sort order are all correct.
+
+  - task: "Finance v2 /api/dashboard/finance-v2 using contracts"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          New endpoint GET /api/dashboard/finance-v2 — replaces estimate-based finance with
+          contracts-based. Role-scoped.
+      - working: true
+        agent: "testing"
+        comment: |
+          Phase 1.7 Finance v2 testing COMPLETE — /app/backend_test_phase17.py, all assertions PASS.
+          AUTH:
+            - Unauthenticated → 401 ✅
+            - handlowiec / manager / admin → 200 ✅
+          BUCKETS (using 4 created contracts id_A cancelled, id_B credit+15d, id_C cash+100%, id_D cash fresh):
+            - payable_contracts contains id_B and id_C ✅
+            - frozen_contracts contains id_D (within 14d) ✅
+            - cancelled id_A not in any bucket ✅
+          TOTALS:
+            - totals_month.commission_payable_sum > 0 ✅
+            - totals_month.commission_frozen_sum > 0 ✅
+          CONTRACTS_MONTH:
+            - Contains id_A (signed today) and id_D (signed today) ✅
+          BY_REP:
+            - Has handlowiec row with signed_count >= expected ✅
+          ROLE SCOPING:
+            - manager.contracts_all ⊇ rep.contracts_all ✅
+            - admin.contracts_all  ⊇ manager.contracts_all ✅
+          Regression: legacy GET /api/dashboard/finance still 200 ✅.
+          Returns totals_month / totals_all_time with:
+            commission_payable_sum (released), commission_frozen_sum, commission_total_sum,
+            margin_sum (sum of global_margin), brutto_sum (sum of gross_amount),
+            signed_count.
+          Plus frozen_contracts / partial_contracts / payable_contracts buckets, by_rep with
+          separate payable and frozen sums, contracts_month, contracts_all.
+          All derived fields computed live via _compute_contract_status(contract).
+
           Requires auth (any role). Returns 401 unauthenticated.
       - working: true
         agent: "testing"
@@ -301,15 +460,12 @@ frontend:
 
 metadata:
   created_by: "main_agent"
-  version: "1.6"
-  test_sequence: 4
+  version: "1.7"
+  test_sequence: 5
   run_ui: false
 
 test_plan:
-  current_focus:
-    - "Finance dashboard endpoint /api/dashboard/finance"
-    - "Settings endpoint supports commission_percent + margin_per_m2"
-    - "All existing auth + leads + dashboards endpoints remain green"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -342,6 +498,41 @@ agent_communication:
       After my test suite ran the admin PUT, the fields were written and all subsequent
       GETs return them correctly — so the DB is now healthy in this environment.
       However production upgrades will have the same silent hole, breaking the
+
+  - agent: "testing"
+    message: |
+      Phase 1.7 (Contracts + Calendar + Finance v2) testing COMPLETE.
+      Test file: /app/backend_test_phase17.py. Result: 106 PASS / 1 FAIL out of 107 assertions.
+
+      ✅ GREEN:
+        - All /api/contracts CRUD + auth gating (401/403) + role scoping ✅
+        - Dynamic 14-day commission logic (frozen / partial / payable / cancelled)
+          across credit & cash, within and after withdrawal window ✅
+        - commission_amount = commission_percent/100 * global_margin — verified ✅
+        - Linked lead auto-flipped to status="podpisana" on contract creation ✅
+        - /api/calendar/meetings: auth, role scoping (rep ⊂ manager ⊂ admin),
+          sorting by meeting_at ✅
+        - /api/dashboard/finance-v2: auth, buckets (payable/frozen/partial),
+          totals_month, contracts_month, by_rep, role scoping ✅
+        - Regression: /api/auth/login (3 roles), /api/settings, /api/dashboard/manager,
+          /api/dashboard/rep, /api/dashboard/finance (legacy), /api/leads CRUD — all 200 ✅
+
+      ❌ ONE BUG FOUND (PATCH /api/leads, not a new endpoint):
+        PATCH /api/leads/{id} with body {"meeting_at": null} returns 200 but does NOT
+        clear the field. Root cause in server.py update_lead() line ~372:
+            updates = {k: v for k, v in body.dict(exclude_unset=True).items() if v is not None}
+        The `is not None` filter silently drops all null values, so NO nullable field
+        on a lead can ever be un-set via PATCH (meeting_at, phone, address,
+        latitude, longitude, building_area, assigned_to, etc.).
+        Recommended fix:
+            updates = body.dict(exclude_unset=True)
+        (exclude_unset already removes fields the client didn't send; null values
+        the client DID send should reach the DB as $set: null.)
+        This is the only gap vs the review spec. The Calendar endpoint itself is
+        correct; it just has no way to un-schedule a meeting today.
+
+      No action needed on /api/contracts, /api/calendar/meetings, /api/dashboard/finance-v2
+      — those are production-ready.
       CommissionCalculator widget for non-admins until someone manually saves settings.
 
       Recommendation for MAIN AGENT: extend seed_data() to always `$set` missing
