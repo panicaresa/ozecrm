@@ -11,6 +11,7 @@ import {
   Platform,
   Image,
   Modal,
+  TextInput,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
@@ -111,11 +112,17 @@ export const LeadDetailScreen: React.FC<{ leadId: string; backLabel?: string }> 
     if (!lead) return;
     setSavingMeeting(true);
     try {
-      // Normalize to ISO (accept YYYY-MM-DDTHH:mm) → append :00Z for server
       let iso: string | null = null;
-      if (meetingAt && meetingAt.length >= 10) {
-        const s = meetingAt.includes("T") ? meetingAt : `${meetingAt}T09:00`;
-        iso = new Date(s).toISOString();
+      const mText = (meetingAt || "").trim();
+      if (mText.length >= 10) {
+        const s = mText.includes("T") ? mText : `${mText}T09:00`;
+        const d = new Date(s);
+        if (isNaN(d.getTime())) {
+          Alert.alert("Zły format", "Użyj formatu YYYY-MM-DDTHH:mm, np. 2026-04-25T14:30");
+          setSavingMeeting(false);
+          return;
+        }
+        iso = d.toISOString();
       }
       const res = await api.patch(`/leads/${lead.id}`, { meeting_at: iso });
       setLead(res.data);
@@ -126,6 +133,19 @@ export const LeadDetailScreen: React.FC<{ leadId: string; backLabel?: string }> 
       setSavingMeeting(false);
     }
   };
+
+  // Bezpieczne formatowanie daty spotkania do wyświetlenia
+  const meetingDisplay = React.useMemo(() => {
+    const raw = lead?.meeting_at;
+    if (!raw) return null;
+    try {
+      const d = new Date(raw);
+      if (isNaN(d.getTime())) return null;
+      return d.toLocaleString("pl-PL", { weekday: "short", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+    } catch {
+      return null;
+    }
+  }, [lead?.meeting_at]);
 
   const uploadDocument = async (type: "umowa" | "photo", data_base64: string, filename: string, mime: string) => {
     setUploading(type);
@@ -371,6 +391,16 @@ export const LeadDetailScreen: React.FC<{ leadId: string; backLabel?: string }> 
                   Data i godzina spotkania
                 </Text>
               </View>
+              {meetingDisplay ? (
+                <View style={styles.meetingCurrent}>
+                  <Feather name="check-circle" size={14} color={colors.secondary} />
+                  <Text style={styles.meetingCurrentText} numberOfLines={1}>
+                    Aktualnie: {meetingDisplay}
+                  </Text>
+                </View>
+              ) : (
+                <Text style={styles.meetingMissing}>⏰ Brak daty — ustaw termin spotkania poniżej</Text>
+              )}
               <Text style={styles.hintSmall}>Format: YYYY-MM-DDTHH:mm (np. 2026-04-25T14:30)</Text>
               <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
                 <TouchableOpacity
@@ -602,6 +632,9 @@ const styles = StyleSheet.create({
   docCount: { fontSize: 11, color: colors.textSecondary, fontWeight: "700", backgroundColor: colors.zinc100, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999 },
   empty: { color: colors.textSecondary, fontSize: 12, fontStyle: "italic", marginBottom: 8 },
   meetingBox: { backgroundColor: colors.paper, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.primary, marginBottom: 16 },
+  meetingCurrent: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 10, paddingVertical: 8, borderRadius: radius.md, backgroundColor: `${colors.secondary}15`, marginBottom: 8 },
+  meetingCurrentText: { color: colors.secondary, fontWeight: "800", fontSize: 12, flex: 1 },
+  meetingMissing: { color: colors.textSecondary, fontSize: 12, marginBottom: 8, fontStyle: "italic" },
   hintSmall: { fontSize: 11, color: colors.textSecondary, lineHeight: 15 },
   input: { borderWidth: 1.5, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 12, backgroundColor: colors.bg },
   meetingSave: { width: 48, height: 48, borderRadius: radius.md, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center" },
