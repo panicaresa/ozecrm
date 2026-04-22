@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -40,6 +40,10 @@ export default function AddContract() {
   const [installments, setInstallments] = useState("1");
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
+  // K6: Idempotency key — stable for this form instance (retries use same key)
+  const idempotencyKey = useRef<string>(
+    `ctr-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  );
 
   const asNumber = (s: string, def = 0) => {
     const n = parseFloat((s || "").replace(",", "."));
@@ -56,19 +60,24 @@ export default function AddContract() {
     const area = asNumber(roofArea);
     const gross = asNumber(grossAmount);
     const margin = asNumber(globalMargin);
+    const down = asNumber(downPayment);
     return (
       signedAt.length >= 10 &&
       area > 0 &&
       gross > 0 &&
       margin >= 0 &&
+      margin <= gross &&
       (financing === "credit" ||
-        (financing === "cash" && asNumber(downPayment) >= 0 && asNumber(installments, 1) > 0))
+        (financing === "cash" && down >= 0 && down <= gross && asNumber(installments, 1) > 0))
     );
   }, [signedAt, roofArea, grossAmount, globalMargin, financing, downPayment, installments]);
 
   const submit = async () => {
     if (!valid) {
-      Alert.alert("Błąd", "Uzupełnij wszystkie wymagane pola z poprawnymi wartościami.");
+      Alert.alert(
+        "Błąd",
+        "Uzupełnij wszystkie wymagane pola z poprawnymi wartościami.\n\n• Marża nie może przekraczać ceny brutto\n• Wpłata własna nie może przekraczać ceny brutto"
+      );
       return;
     }
     setSaving(true);
@@ -89,7 +98,9 @@ export default function AddContract() {
         body.installments_count = parseInt(installments) || 1;
         body.total_paid_amount = asNumber(downPayment);
       }
-      const res = await api.post("/contracts", body);
+      const res = await api.post("/contracts", body, {
+        headers: { "Idempotency-Key": idempotencyKey.current },
+      });
       Alert.alert(
         "Umowa dodana",
         `Prowizja: ${fmtPln(res.data.commission_amount || 0)}\nStatus: ${
@@ -143,7 +154,6 @@ export default function AddContract() {
           <View style={styles.quickRow}>
             <TouchableOpacity style={styles.chip} onPress={() => setQuickDate(-1)}><Text style={styles.chipText}>Wczoraj</Text></TouchableOpacity>
             <TouchableOpacity style={styles.chip} onPress={() => setQuickDate(0)}><Text style={styles.chipText}>Dziś</Text></TouchableOpacity>
-            <TouchableOpacity style={styles.chip} onPress={() => setQuickDate(-15)}><Text style={styles.chipText}>-15 dni (test)</Text></TouchableOpacity>
           </View>
 
           <Text style={styles.label}>Typ budynku *</Text>

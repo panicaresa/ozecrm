@@ -515,19 +515,174 @@ frontend:
           Regression: POST /api/auth/login (3 roles), GET /api/auth/me, GET /api/settings
           (3 roles) all still 200 ✅.
 
+  - task: "Phase 1.9 K1 signed_at validation (handlowiec 2d back, admin 90d back, no future >1d)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Phase 1.9 — verified via /app/backend_test_phase19.py.
+          POST /api/contracts signed_at validation:
+          - handlowiec today → 200 ✅
+          - handlowiec yesterday (-1d) → 200 ✅
+          - handlowiec -3d → 400 with Polish message "wczorajsza lub dzisiejsza" ✅
+          - handlowiec -15d → 400 ✅
+          - handlowiec +2d future → 400 with "przyszłości" ✅
+          - admin -30d → 200 (admin allowed up to 90) ✅
+          - admin -95d → 400 with "90 dni wstecz" ✅
+
+  - task: "Phase 1.9 W2 commission_percent_override forbidden for handlowiec"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          POST /api/contracts with commission_percent_override=99:
+          - handlowiec → 403 with Polish "Handlowiec nie może nadpisywać" ✅
+          - manager → 200; returned contract.commission_percent=99 ✅
+          - admin → 200; returned contract.commission_percent=99 ✅
+
+  - task: "Phase 1.9 K5 Cross-field validation (margin/gross/down_payment/roof/installments/paid)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          POST /api/contracts invalid combinations → all 400 with Polish messages:
+          - global_margin=60000 > gross=50000 → 400 "nie może być większa" ✅
+          - cash down_payment=55000 > gross=50000 → 400 "większa" ✅
+          - down_payment=-100 → 400 ✅
+          - roof_area_m2=0 → 400 ✅
+          - installments_count=0 → 400 ✅
+          PATCH /api/contracts/{id}:
+          - total_paid=60000 when gross=50000 (>105%) → 400 ✅
+          - total_paid=52000 when gross=50000 (within 5%) → 200 ✅
+          - total_paid=-10 → 400 ✅
+
+  - task: "Phase 1.9 K6 Idempotency-Key on POST /api/contracts"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Idempotency-Key header replay protection:
+          - POST #1 with Idempotency-Key X → 200 returns contract id=A ✅
+          - POST #2 SAME body + SAME key → 200 returns SAME id=A (no duplicate) ✅
+          - GET /api/contracts shows exactly ONE contract for that lead_id ✅
+          - POST #3 SAME body + DIFFERENT key → creates second contract id=B (B!=A) ✅
+
+  - task: "Phase 1.9 W3 meeting_at validation on PATCH /api/leads"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          PATCH /api/leads/{id} meeting_at validation:
+          - "2099-01-01T10:00:00Z" → 400 with "2 lata w przód" ✅
+          - "2020-01-01T10:00:00Z" → 400 with "wcześniejszy niż wczoraj" ✅
+          - "invalid-date" → 400 with "nieprawidłowy format" ✅
+          - <tomorrow ISO> → 200 (value persisted) ✅
+          - null → 200 (clearing works, resolves earlier Phase 1.7 bug) ✅
+
+  - task: "Phase 1.9 W9 contract_audit_log endpoint"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          GET /api/contracts/{id}/audit-log verified:
+          - After 3 PATCHes (total_paid_amount, additional_costs+note, cancelled) →
+            endpoint returns 4 entries (some PATCHes record multiple fields) ✅
+          - All required fields present on each entry: id, contract_id, field, old_value,
+            new_value, changed_by, changed_by_name, changed_by_role, changed_at ✅
+          - additional_costs entry has extra `reason_note` = "test" ✅
+          - Entries sorted by changed_at desc; latest entry field="cancelled",
+            old_value=false, new_value=true ✅
+          - admin → 200; owner handlowiec → 200; manager (team) → 200 ✅
+          - unrelated handlowiec → 403; nonexistent contract → 404 ✅
+
 metadata:
   created_by: "main_agent"
-  version: "1.8"
-  test_sequence: 7
+  version: "1.9"
+  test_sequence: 8
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "K1: signed_at validation (handlowiec 2d max back, admin 90d max, no future >1d)"
+    - "K5: gross/margin/down_payment cross-validation"
+    - "K6: Idempotency-Key deduplication on POST /contracts"
+    - "W2: commission_percent_override forbidden for handlowiec"
+    - "W3: meeting_at range validation"
+    - "W9: contract_audit_log on PATCH + new endpoint /contracts/{id}/audit-log"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
+  - agent: "testing"
+    message: |
+      Phase 1.9 (Security & Integrity) backend testing COMPLETE — /app/backend_test_phase19.py.
+      Result: 71/71 assertions PASS, 0 failures.
+
+      ✅ K1 signed_at validation:
+        - handlowiec: today/yesterday 200; -3d/-15d 400 ("wczorajsza lub dzisiejsza");
+          +2d future 400 ("przyszłości")
+        - admin: -30d 200; -95d 400 ("90 dni wstecz")
+      ✅ W2 commission_percent_override:
+        - handlowiec → 403 ("Handlowiec nie może nadpisywać")
+        - manager/admin → 200 with commission_percent=99 applied
+      ✅ K5 cross-field:
+        - margin>gross, down_payment>gross, down_payment<0, roof_area=0,
+          installments=0 all → 400 with Polish messages
+        - PATCH total_paid>gross*1.05 → 400; within 5% → 200; <0 → 400
+      ✅ K6 Idempotency-Key: replay returns same contract id; different key creates 2nd
+      ✅ W3 meeting_at: 2099/2020/invalid → 400 with exact Polish messages;
+         tomorrow → 200; null → 200 (clearing works — earlier bug resolved)
+      ✅ W9 contract_audit_log:
+         - After 3 PATCHes → 4 entries returned
+         - All required fields (id, contract_id, field, old/new_value, changed_by*,
+           changed_at) present; additional_costs entry has reason_note
+         - Sorted by changed_at desc; latest entry is cancelled(false→true)
+         - Role scope: admin/owner handlowiec/team manager 200;
+           unrelated handlowiec 403; nonexistent 404
+      ✅ Regression: login/auth/me/settings(GET+PUT admin)/dashboard/finance-v2/
+         calendar/meetings/leads CRUD all 200 for respective roles;
+         PUT /settings handlowiec 403
+
+      All 10 test contracts and 16 test leads cleaned up via admin DELETE afterwards.
+      No blockers. All Phase 1.9 tasks marked working=true.
+
   - agent: "testing"
     message: |
       Phase 1.8 backend testing COMPLETE — /app/backend_test_phase18.py, 66/66 assertions PASS.

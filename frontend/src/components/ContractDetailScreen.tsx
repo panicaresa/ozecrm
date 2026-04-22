@@ -50,11 +50,24 @@ interface Contract {
   cancelled?: boolean;
 }
 
+interface AuditEntry {
+  id: string;
+  field: string;
+  old_value: any;
+  new_value: any;
+  changed_by_name?: string;
+  changed_by_role?: string;
+  changed_at?: string;
+  reason_note?: string;
+}
+
 export default function ContractDetail() {
   const { id } = useLocalSearchParams();
   const router = useRouter();
   const { user } = useAuth();
   const [contract, setContract] = useState<Contract | null>(null);
+  const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
+  const [showAudit, setShowAudit] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -69,11 +82,15 @@ export default function ContractDetail() {
   const load = useCallback(async () => {
     setErr(null);
     try {
-      const res = await api.get<Contract>(`/contracts/${id}`);
-      setContract(res.data);
-      setPaid(String(res.data.total_paid_amount ?? 0));
-      setAddCosts(String(res.data.additional_costs ?? 0));
-      setAddCostsNote(res.data.additional_costs_note || "");
+      const [resC, resA] = await Promise.all([
+        api.get<Contract>(`/contracts/${id}`),
+        api.get<AuditEntry[]>(`/contracts/${id}/audit-log`).catch(() => ({ data: [] as AuditEntry[] })),
+      ]);
+      setContract(resC.data);
+      setAuditLog(resA.data);
+      setPaid(String(resC.data.total_paid_amount ?? 0));
+      setAddCosts(String(resC.data.additional_costs ?? 0));
+      setAddCostsNote(resC.data.additional_costs_note || "");
     } catch (e) {
       setErr(formatApiError(e));
     } finally {
@@ -324,6 +341,59 @@ export default function ContractDetail() {
             </TouchableOpacity>
           )}
 
+          {/* Audit log viewer */}
+          {auditLog.length > 0 && (
+            <View style={styles.card}>
+              <TouchableOpacity
+                style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}
+                onPress={() => setShowAudit((v) => !v)}
+                testID="audit-toggle"
+              >
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  <Feather name="clock" size={14} color={colors.textPrimary} />
+                  <Text style={styles.sectionTitle}>
+                    Historia zmian <Text style={{ color: colors.textSecondary, fontWeight: "700" }}>({auditLog.length})</Text>
+                  </Text>
+                </View>
+                <Feather name={showAudit ? "chevron-up" : "chevron-down"} size={16} color={colors.textSecondary} />
+              </TouchableOpacity>
+              {showAudit && (
+                <View style={{ marginTop: 10 }}>
+                  {auditLog.map((e) => {
+                    const fieldLabel: Record<string, string> = {
+                      total_paid_amount: "Wpłata",
+                      additional_costs: "Koszty dodatkowe",
+                      additional_costs_note: "Uzasadnienie korekty",
+                      cancelled: "Anulowanie",
+                      note: "Notatka",
+                    };
+                    const fmtVal = (v: any) => {
+                      if (v === null || v === undefined) return "—";
+                      if (typeof v === "number") return fmtPln(v);
+                      if (typeof v === "boolean") return v ? "TAK" : "NIE";
+                      return String(v).slice(0, 40);
+                    };
+                    return (
+                      <View key={e.id} style={styles.auditRow} testID={`audit-entry-${e.id}`}>
+                        <View style={styles.auditDot} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.auditField}>{fieldLabel[e.field] || e.field}</Text>
+                          <Text style={styles.auditChange}>
+                            {fmtVal(e.old_value)} → <Text style={{ fontWeight: "900", color: colors.textPrimary }}>{fmtVal(e.new_value)}</Text>
+                          </Text>
+                          {e.reason_note ? <Text style={styles.auditReason}>📝 {e.reason_note}</Text> : null}
+                          <Text style={styles.auditBy}>
+                            {e.changed_by_name || "—"} · {e.changed_by_role?.toUpperCase()} · {e.changed_at ? new Date(e.changed_at).toLocaleString("pl-PL", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : ""}
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
+            </View>
+          )}
+
           <Text style={[styles.hintSmall, { textAlign: "center", marginTop: 16 }]}>
             ID: {contract.id.slice(0, 8)}
           </Text>
@@ -369,5 +439,11 @@ const styles = StyleSheet.create({
   correctionAlert: { flexDirection: "row", gap: 10, padding: 14, borderRadius: radius.md, backgroundColor: "#FEF3C7", borderWidth: 1.5, borderColor: "#F59E0B", marginBottom: 12, alignItems: "flex-start" },
   correctionAlertTitle: { color: "#92400E", fontWeight: "900", fontSize: 14 },
   correctionAlertNote: { color: "#92400E", fontSize: 12, marginTop: 3, lineHeight: 16 },
+  auditRow: { flexDirection: "row", gap: 10, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.zinc100 },
+  auditDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.primary, marginTop: 8 },
+  auditField: { fontSize: 12, fontWeight: "900", color: colors.textPrimary, textTransform: "uppercase", letterSpacing: 0.5 },
+  auditChange: { fontSize: 12, color: colors.textSecondary, marginTop: 3 },
+  auditReason: { fontSize: 11, color: colors.accent, marginTop: 3, fontStyle: "italic" },
+  auditBy: { fontSize: 10, color: colors.textSecondary, marginTop: 4 },
   err: { color: colors.error, fontSize: 14 },
 });

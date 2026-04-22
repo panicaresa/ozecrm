@@ -12,7 +12,7 @@ import jwt
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -374,6 +374,19 @@ async def update_lead(lead_id: str, body: LeadUpdate, user: Dict[str, Any] = Dep
     updates = body.dict(exclude_unset=True)
     if "status" in updates and updates["status"] not in LEAD_STATUSES:
         raise HTTPException(status_code=400, detail="Invalid status")
+    # W3: walidacja meeting_at (zakres [-1d, +2y], format)
+    if "meeting_at" in updates:
+        mv = updates["meeting_at"]
+        if mv is not None:
+            parsed = _parse_iso_dt(mv) if isinstance(mv, str) else mv
+            if parsed is None:
+                raise HTTPException(status_code=400, detail="Nieprawidłowy format meeting_at (wymagany ISO datetime).")
+            cur = now()
+            if parsed < cur - timedelta(days=1):
+                raise HTTPException(status_code=400, detail="Termin spotkania nie może być wcześniejszy niż wczoraj.")
+            if parsed > cur + timedelta(days=365 * 2):
+                raise HTTPException(status_code=400, detail="Termin spotkania nie może być później niż 2 lata w przód.")
+            updates["meeting_at"] = parsed
     updates["updated_at"] = now()
     await db.leads.update_one({"id": lead_id}, {"$set": updates})
     out = await db.leads.find_one({"id": lead_id}, {"_id": 0})
@@ -1013,14 +1026,80 @@ async def _contract_scope_query(user: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @api.post("/contracts")
-async def create_contract(body: ContractIn, user: Dict[str, Any] = Depends(get_current_user)):
+async def create_contract(
+    body: ContractIn,
+    request: Request,
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    # ── Validation layer (Faza 1.9) ─────────────────────────────────────────────
     if body.financing_type not in FINANCING_TYPES:
         raise HTTPException(status_code=400, detail="Invalid financing_type (credit|cash)")
     if body.building_type not in ("mieszkalny", "gospodarczy"):
         raise HTTPException(status_code=400, detail="Invalid building_type")
     if body.roof_area_m2 <= 0 or body.gross_amount <= 0 or body.global_margin < 0:
         raise HTTPException(status_code=400, detail="Invalid numeric fields")
+
+    # K5: biznesowa spójność — marża, wpłata, transze
+    if body.global_margin > body.gross_amount:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Marża ({body.global_margin:.2f} PLN) nie może być większa niż cena brutto ({body.gross_amount:.2f} PLN).",
+        )
+    if body.down_payment_amount is not None:
+        if body.down_payment_amount < 0:
+            raise HTTPException(status_code=400, detail="Wpłata własna nie może być ujemna.")
+        if body.down_payment_amount > body.gross_amount:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Wpłata własna ({body.down_payment_amount:.2f} PLN) nie może być większa niż cena brutto ({body.gross_amount:.2f} PLN).",
+            )
+    if body.total_paid_amount is not None and body.total_paid_amount < 0:
+        raise HTTPException(status_code=400, detail="Kwota opłacona nie może być ujemna.")
+    if body.installments_count is not None and body.installments_count < 1:
+        raise HTTPException(status_code=400, detail="Liczba transz musi być >= 1.")
+
+    # K1: walidacja signed_at (przeciw oszustwom prowizyjnym)
+    signed_at = _parse_iso_dt(body.signed_at) or now()
+    cur = now()
+    if signed_at > cur + timedelta(days=1):
+        raise HTTPException(status_code=400, detail="Data podpisania nie może być z przyszłości.")
+    # Handlowiec: tylko dzień wczorajszy/dzisiejszy (tolerancja 2 dni wstecz na timezone)
+    max_backdate_days = 90 if user["role"] == "admin" else 2
+    min_signed = cur - timedelta(days=max_backdate_days)
+    if signed_at < min_signed:
+        if user["role"] == "admin":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Admin może cofnąć datę podpisania maksymalnie o 90 dni wstecz (minimum: {min_signed.date().isoformat()}).",
+            )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Data podpisania może być tylko wczorajsza lub dzisiejsza. "
+                f"W przypadku korekty historycznej skontaktuj się z Adminem."
+            ),
+        )
+
+    # W2: commission_percent_override tylko dla admin/manager
+    if body.commission_percent_override is not None and user["role"] == "handlowiec":
+        raise HTTPException(
+            status_code=403,
+            detail="Handlowiec nie może nadpisywać % prowizji. Skontaktuj się z Adminem.",
+        )
+    if body.commission_percent_override is not None:
+        if body.commission_percent_override < 0 or body.commission_percent_override > 100:
+            raise HTTPException(status_code=400, detail="commission_percent_override musi być w zakresie 0-100.")
+
     lead = await _ensure_lead_access(body.lead_id, user)
+
+    # K6: idempotency — protect against duplicate POST from network retries on 2G
+    idempotency_key = request.headers.get("Idempotency-Key") or request.headers.get("X-Idempotency-Key")
+    if idempotency_key:
+        existing = await db.contracts.find_one({"idempotency_key": idempotency_key}, {"_id": 0})
+        if existing:
+            # Return existing contract (idempotent replay) instead of creating duplicate
+            return _serialize_contract(existing)
+
     settings_doc = await db.settings.find_one({"id": "global"}, {"_id": 0}) or {}
     commission_pct = (
         float(body.commission_percent_override)
@@ -1028,7 +1107,6 @@ async def create_contract(body: ContractIn, user: Dict[str, Any] = Depends(get_c
         else float(settings_doc.get("commission_percent") or 50.0)
     )
     commission_amount = round((commission_pct / 100.0) * float(body.global_margin), 2)
-    signed_at = _parse_iso_dt(body.signed_at) or now()
     total_paid = float(body.total_paid_amount or 0.0)
     if body.financing_type == "cash" and body.down_payment_amount is not None and total_paid <= 0:
         total_paid = float(body.down_payment_amount)
@@ -1055,11 +1133,20 @@ async def create_contract(body: ContractIn, user: Dict[str, Any] = Depends(get_c
         "commission_amount": commission_amount,
         "note": body.note,
         "cancelled": False,
+        "idempotency_key": idempotency_key,
         "created_by": user["id"],
         "created_at": now(),
         "updated_at": now(),
     }
-    await db.contracts.insert_one(doc)
+    try:
+        await db.contracts.insert_one(doc)
+    except Exception as e:
+        # Race condition — another concurrent POST won the insert; try to fetch by key
+        if idempotency_key:
+            existing = await db.contracts.find_one({"idempotency_key": idempotency_key}, {"_id": 0})
+            if existing:
+                return _serialize_contract(existing)
+        raise HTTPException(status_code=500, detail=f"Insert failed: {e}")
     await db.leads.update_one({"id": body.lead_id}, {"$set": {"status": "podpisana", "updated_at": now()}})
     return _serialize_contract(doc)
 
@@ -1088,13 +1175,46 @@ async def update_contract(contract_id: str, body: ContractUpdate, user: Dict[str
         if c.get("owner_manager_id") != user["id"] and c.get("rep_id") not in rep_ids:
             raise HTTPException(status_code=403, detail="Forbidden")
     updates: Dict[str, Any] = {}
+    audit_entries: List[Dict[str, Any]] = []
+
+    def _track(field: str, new_val: Any, extra: Optional[Dict[str, Any]] = None):
+        old_val = c.get(field)
+        audit_entries.append(
+            {
+                "id": str(uuid.uuid4()),
+                "contract_id": contract_id,
+                "field": field,
+                "old_value": old_val,
+                "new_value": new_val,
+                "changed_by": user["id"],
+                "changed_by_name": user.get("name") or user.get("email"),
+                "changed_by_role": user["role"],
+                "changed_at": now(),
+                **(extra or {}),
+            }
+        )
+
     if body.total_paid_amount is not None:
         if body.total_paid_amount < 0:
             raise HTTPException(status_code=400, detail="total_paid_amount must be >= 0")
-        updates["total_paid_amount"] = round(float(body.total_paid_amount), 2)
+        gross = float(c.get("gross_amount") or 0)
+        # K5: wpłata > brutto blokada (z tolerancją 5% dla odsetek/pomyłek)
+        if gross > 0 and float(body.total_paid_amount) > gross * 1.05:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Kwota wpłacona ({body.total_paid_amount:.2f} PLN) nie może przekroczyć ceny brutto o >5% ({gross * 1.05:.2f} PLN).",
+            )
+        new_val = round(float(body.total_paid_amount), 2)
+        if new_val != (c.get("total_paid_amount") or 0.0):
+            _track("total_paid_amount", new_val)
+        updates["total_paid_amount"] = new_val
     if body.note is not None:
+        if (body.note or "") != (c.get("note") or ""):
+            _track("note", body.note)
         updates["note"] = body.note
     if body.cancelled is not None:
+        if bool(body.cancelled) != bool(c.get("cancelled")):
+            _track("cancelled", bool(body.cancelled))
         updates["cancelled"] = bool(body.cancelled)
     # Faza 1.8: admin-only corrections
     if body.additional_costs is not None or body.additional_costs_note is not None:
@@ -1103,17 +1223,46 @@ async def update_contract(contract_id: str, body: ContractUpdate, user: Dict[str
         if body.additional_costs is not None:
             if body.additional_costs < 0:
                 raise HTTPException(status_code=400, detail="additional_costs must be >= 0")
-            updates["additional_costs"] = round(float(body.additional_costs), 2)
+            new_val = round(float(body.additional_costs), 2)
+            if new_val != float(c.get("additional_costs") or 0):
+                _track("additional_costs", new_val, extra={"reason_note": body.additional_costs_note})
+            updates["additional_costs"] = new_val
         if body.additional_costs_note is not None:
+            if (body.additional_costs_note or "") != (c.get("additional_costs_note") or ""):
+                _track("additional_costs_note", body.additional_costs_note)
             updates["additional_costs_note"] = body.additional_costs_note
     if not updates:
         raise HTTPException(status_code=400, detail="Nothing to update")
     updates["updated_at"] = now()
     await db.contracts.update_one({"id": contract_id}, {"$set": updates})
+    # Persist audit log entries
+    if audit_entries:
+        await db.contract_audit_log.insert_many(audit_entries)
     updated = await db.contracts.find_one({"id": contract_id}, {"_id": 0})
     u = await db.users.find_one({"id": updated.get("rep_id")}, {"_id": 0, "password_hash": 0}) if updated.get("rep_id") else None
     name = (u.get("name") or u.get("email")) if u else None
     return _serialize_contract(updated, rep_name=name)
+
+
+@api.get("/contracts/{contract_id}/audit-log")
+async def get_contract_audit_log(contract_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    """Return full audit history. Accessible to admin/manager (team scope) + handlowiec (own)."""
+    c = await db.contracts.find_one({"id": contract_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(status_code=404, detail="Contract not found")
+    # Scope check
+    if user["role"] == "handlowiec" and c.get("rep_id") != user["id"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if user["role"] == "manager":
+        reps = await db.users.find({"manager_id": user["id"]}, {"id": 1, "_id": 0}).to_list(500)
+        rep_ids = {r["id"] for r in reps} | {user["id"]}
+        if c.get("owner_manager_id") != user["id"] and c.get("rep_id") not in rep_ids:
+            raise HTTPException(status_code=403, detail="Forbidden")
+    entries = await db.contract_audit_log.find({"contract_id": contract_id}, {"_id": 0}).sort("changed_at", -1).to_list(500)
+    for e in entries:
+        if "changed_at" in e:
+            e["changed_at"] = iso(e["changed_at"])
+    return entries
 
 
 @api.get("/contracts/{contract_id}")
@@ -1262,6 +1411,9 @@ async def seed_data():
     await db.contracts.create_index("rep_id")
     await db.contracts.create_index("owner_manager_id")
     await db.contracts.create_index("signed_at")
+    await db.contracts.create_index("idempotency_key", sparse=True)
+    await db.contract_audit_log.create_index("contract_id")
+    await db.contract_audit_log.create_index("changed_at")
 
     existing_settings = await db.settings.find_one({"id": "global"})
     if not existing_settings:
