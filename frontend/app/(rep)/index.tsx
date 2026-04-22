@@ -5,6 +5,7 @@ import { Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import * as Location from "expo-location";
 import * as Battery from "expo-battery";
+import { startBackgroundTracking, stopBackgroundTracking, isBackgroundTrackingActive } from "../../src/lib/backgroundTracking";
 import { colors, radius, spacing } from "../../src/theme";
 import { useAuth } from "../../src/lib/auth";
 import { api, formatApiError } from "../../src/lib/api";
@@ -66,10 +67,23 @@ export default function RepHome() {
         );
         return;
       }
-      setWorking(true); // immediate visual feedback
+      setWorking(true);
       await pushLocation();
+      // Foreground fallback — co 30s wysyłamy, gdy aplikacja aktywna
       intervalRef.current = setInterval(pushLocation, 30000);
-      Alert.alert("Tryb pracy aktywny", "GPS wysyła Twoją pozycję do managera co 30 sekund.");
+      // Faza 2.0: Background tracking — kontynuacja przy zgaszonym ekranie
+      const bgOk = await startBackgroundTracking();
+      if (bgOk) {
+        Alert.alert(
+          "Tryb pracy aktywny",
+          "GPS wysyła pozycję do managera. Działa również przy zgaszonym ekranie (background)."
+        );
+      } else {
+        Alert.alert(
+          "Tryb pracy — tylko foreground",
+          "Nie udzielono uprawnień do lokalizacji w tle. GPS działa wyłącznie gdy aplikacja jest otwarta."
+        );
+      }
     } finally {
       setWorkLoading(false);
     }
@@ -82,6 +96,7 @@ export default function RepHome() {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
       }
+      await stopBackgroundTracking();
       setWorking(false);
       setLastPush(null);
       try {

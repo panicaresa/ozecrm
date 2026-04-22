@@ -20,6 +20,7 @@ import { StatusDonut } from "../../src/components/StatusDonut";
 import { LeadMap } from "../../src/components/LeadMap";
 import { BrandLogo } from "../../src/components/BrandLogo";
 import { CommissionCalculator } from "../../src/components/CommissionCalculator";
+import { useRepLocationsWS } from "../../src/lib/useRepLocationsWS";
 import { Lead } from "../../src/components/LeadCard";
 
 interface Dashboard {
@@ -44,6 +45,49 @@ export default function ManagerDashboard() {
   const [selectedPinId, setSelectedPinId] = useState<string | null>(null);
   const [selectedRepId, setSelectedRepId] = useState<string | null>(null);
   const [layers, setLayers] = useState({ leads: true, reps: true });
+  // Faza 2.0: Live WebSocket feed for reps (supplements the 30s polling)
+  const { status: wsStatus, locations: wsLocations } = useRepLocationsWS(true);
+
+  // Merge WS locations into reps_live (WS is more up-to-date than polling)
+  const mergedReps = React.useMemo(() => {
+    const base = (data?.reps_live || []) as any[];
+    if (wsLocations.size === 0) return base;
+    const result = base.map((r) => {
+      const live = wsLocations.get(r.user_id);
+      if (!live) return r;
+      return {
+        ...r,
+        lat: live.latitude ?? r.lat,
+        lng: live.longitude ?? r.lng,
+        battery: live.battery ?? r.battery,
+        active: live.is_active ?? r.active,
+      };
+    });
+    // Add any WS-only reps not in base (newly-online)
+    for (const [rid, live] of wsLocations.entries()) {
+      if (!result.find((r) => r.user_id === rid)) {
+        result.push({
+          user_id: rid,
+          name: live.rep_name || "—",
+          lat: live.latitude,
+          lng: live.longitude,
+          battery: live.battery,
+          active: live.is_active,
+          last_seen_seconds: 0,
+        });
+      }
+    }
+    return result;
+  }, [data?.reps_live, wsLocations]);
+
+  // Track polylines from WS snapshot
+  const tracks = React.useMemo(() => {
+    const t: Record<string, { lat: number; lng: number; t?: string }[]> = {};
+    for (const [rid, live] of wsLocations.entries()) {
+      if (live.track && live.track.length > 0) t[rid] = live.track;
+    }
+    return t;
+  }, [wsLocations]);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -231,7 +275,8 @@ export default function ManagerDashboard() {
 
           <LeadMap
             pins={data?.pins || []}
-            reps={data?.reps_live || []}
+            reps={mergedReps}
+            tracks={tracks}
             layers={layers}
             selectedId={selectedPinId}
             selectedRepId={selectedRepId}
@@ -247,6 +292,13 @@ export default function ManagerDashboard() {
             }}
             testID="lead-map"
           />
+          {/* Live WS status indicator */}
+          <View style={styles.liveBadge}>
+            <View style={[styles.liveDot, { backgroundColor: wsStatus.connected ? colors.secondary : colors.textSecondary }]} />
+            <Text style={styles.liveText}>
+              {wsStatus.connected ? "LIVE" : wsStatus.reconnectAttempt > 0 ? `reconnect #${wsStatus.reconnectAttempt}` : "polling"}
+            </Text>
+          </View>
         </View>
 
         {/* Selected rep callout on web */}
@@ -355,6 +407,7 @@ const styles = StyleSheet.create({
   commandText: { fontSize: 10, fontWeight: "900", color: colors.textPrimary, letterSpacing: 2 },
   liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.error, marginLeft: "auto" },
   liveText: { fontSize: 10, fontWeight: "900", color: colors.error, letterSpacing: 1 },
+  liveBadge: { position: "absolute", top: 10, right: 10, flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, backgroundColor: "rgba(255,255,255,0.92)", borderWidth: 1, borderColor: colors.border },
   kpiGrid: { flexDirection: "row", gap: spacing.sm, paddingHorizontal: spacing.md, marginTop: spacing.sm },
   sectionCard: { backgroundColor: colors.paper, marginHorizontal: spacing.md, marginTop: spacing.md, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border },
   sectionHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },

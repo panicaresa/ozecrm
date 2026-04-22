@@ -1,6 +1,6 @@
 import React from "react";
 import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
-import MapView, { Marker, PROVIDER_DEFAULT, Callout } from "react-native-maps";
+import MapView, { Marker, PROVIDER_DEFAULT, Callout, Polyline } from "react-native-maps";
 import { Feather } from "@expo/vector-icons";
 import { colors, radius, statusColor, statusLabel } from "../theme";
 
@@ -31,6 +31,7 @@ export interface LayerState {
 interface Props {
   pins: MapPin[];
   reps?: RepPin[];
+  tracks?: Record<string, { lat: number; lng: number; t?: string }[]>; // rep_id → polyline
   height?: number;
   testID?: string;
   selectedId?: string | null;
@@ -56,12 +57,14 @@ function formatWorkTime(s?: number | null) {
 export const LeadMap: React.FC<Props> = ({
   pins,
   reps = [],
+  tracks = {},
   height = 320,
   testID,
   onSelectPin,
   layers = { leads: true, reps: true },
   onToggleLayer,
   onSelectRep,
+  selectedRepId,
 }) => {
   const validLeads = pins.filter((p) => typeof p.lat === "number" && typeof p.lng === "number");
   const validReps = reps.filter((r) => typeof r.lat === "number" && typeof r.lng === "number");
@@ -90,29 +93,46 @@ export const LeadMap: React.FC<Props> = ({
           ))}
         {layers.reps &&
           validReps.map((r) => {
+            const track = tracks[r.user_id];
+            const hasTrack = track && track.length > 1;
+            const isSelected = selectedRepId === r.user_id;
             const dotColor = r.active ? colors.secondary : "#64748B";
             return (
-              <Marker
-                key={`rep-${r.user_id}`}
-                coordinate={{ latitude: r.lat, longitude: r.lng }}
-                onPress={() => onSelectRep?.(r.user_id)}
-                anchor={{ x: 0.5, y: 0.5 }}
-              >
-                <View style={[styles.repBubble, { backgroundColor: dotColor, borderColor: "#fff" }]}>
-                  <Text style={styles.repInitials}>{repInitials(r.name)}</Text>
-                </View>
-                <Callout tooltip>
-                  <View style={styles.callout}>
-                    <Text style={styles.calloutName}>{r.name}</Text>
-                    <Text style={styles.calloutMeta}>
-                      {r.active ? formatWorkTime(r.last_seen_seconds) : "Offline"}
-                    </Text>
-                    {typeof r.battery === "number" && (
-                      <Text style={styles.calloutMeta}>🔋 {Math.round(r.battery * 100)}%</Text>
-                    )}
+              <React.Fragment key={`rep-wrap-${r.user_id}`}>
+                {hasTrack && (
+                  <Polyline
+                    key={`track-${r.user_id}`}
+                    coordinates={track.map((p) => ({ latitude: p.lat, longitude: p.lng }))}
+                    strokeWidth={isSelected ? 5 : 3}
+                    strokeColor={isSelected ? colors.primary : `${colors.secondary}CC`}
+                    lineCap="round"
+                    lineJoin="round"
+                  />
+                )}
+                <Marker
+                  key={`rep-${r.user_id}`}
+                  coordinate={{ latitude: r.lat, longitude: r.lng }}
+                  onPress={() => onSelectRep?.(r.user_id)}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                  zIndex={10}
+                >
+                  <View style={[styles.repBubble, { backgroundColor: dotColor, borderColor: isSelected ? colors.primary : "#fff", borderWidth: isSelected ? 4 : 3 }]}>
+                    <Text style={styles.repInitials}>{repInitials(r.name)}</Text>
                   </View>
-                </Callout>
-              </Marker>
+                  <Callout tooltip>
+                    <View style={styles.callout}>
+                      <Text style={styles.calloutName}>{r.name}</Text>
+                      <Text style={styles.calloutMeta}>
+                        {r.active ? formatWorkTime(r.last_seen_seconds) : "Offline"}
+                      </Text>
+                      {typeof r.battery === "number" && (
+                        <Text style={styles.calloutMeta}>🔋 {Math.round(r.battery * 100)}%</Text>
+                      )}
+                      {hasTrack && <Text style={styles.calloutMeta}>📍 {track!.length} punktów trasy</Text>}
+                    </View>
+                  </Callout>
+                </Marker>
+              </React.Fragment>
             );
           })}
       </MapView>

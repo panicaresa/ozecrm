@@ -53,6 +53,8 @@ interface FinanceData {
     commission_total_sum: number;
     margin_sum: number;
     brutto_sum: number;
+    cancelled_count?: number;
+    cancelled_gross_sum?: number;
   };
   totals_all_time: {
     signed_count: number;
@@ -61,6 +63,7 @@ interface FinanceData {
     commission_total_sum: number;
     margin_sum: number;
     brutto_sum: number;
+    cancelled_count?: number;
   };
   by_rep: {
     rep_id: string;
@@ -74,6 +77,7 @@ interface FinanceData {
   frozen_contracts: Contract[];
   partial_contracts: Contract[];
   payable_contracts: Contract[];
+  cancelled_contracts?: Contract[];
   contracts_month: Contract[];
 }
 
@@ -362,6 +366,25 @@ export function FinanceScreen({ role, testID }: Props) {
               </Text>
             </View>
             {data?.payable_contracts.map((c) => (
+              <ContractRow key={c.id} c={c} role={role} />
+            ))}
+          </View>
+        )}
+
+        {/* Cancelled section (C1 - widoczne dla wszystkich ról) */}
+        {(data?.cancelled_contracts?.length ?? 0) > 0 && (
+          <View style={[styles.section, { borderLeftWidth: 4, borderLeftColor: colors.error, opacity: 0.85 }]} testID="cancelled-section">
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 6 }}>
+              <Feather name="x-circle" size={14} color={colors.error} />
+              <Text style={styles.sectionTitle}>
+                Anulowane{" "}
+                <Text style={styles.sectionSub}>({data?.cancelled_contracts!.length})</Text>
+              </Text>
+            </View>
+            <Text style={[styles.sectionSub, { marginBottom: 10 }]}>
+              Prowizja wyzerowana — umowy nie liczą się do raportów i sum.
+            </Text>
+            {data?.cancelled_contracts!.map((c) => (
               <ContractRow key={c.id} c={c} role={role} />
             ))}
           </View>

@@ -3,6 +3,8 @@ import { Stack } from "expo-router";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { AuthProvider } from "../src/lib/auth";
+// Register background location task at module load (Faza 2.0)
+import "../src/lib/backgroundTracking";
 
 export default function RootLayout() {
   return (

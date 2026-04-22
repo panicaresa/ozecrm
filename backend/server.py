@@ -12,11 +12,13 @@ import jwt
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, WebSocket, WebSocketDisconnect
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
+import json
+import asyncio
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("oze-crm")
@@ -491,8 +493,46 @@ async def delete_document(lead_id: str, doc_id: str, user: Dict[str, Any] = Depe
 # --------------------------------------------------------------------------------------
 # Rep live location
 # --------------------------------------------------------------------------------------
+MAX_TRACK_POINTS = 500  # rolling buffer of today's polyline points
+MIN_TRACK_DELTA_METERS = 10.0  # deduplicate near-identical GPS pings
+
+
+def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    import math
+    R = 6371000.0
+    dlat = math.radians(lat2 - lat1)
+    dlng = math.radians(lng2 - lng1)
+    a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng / 2) ** 2
+    return 2 * R * math.asin(math.sqrt(a))
+
+
 @api.put("/rep/location")
 async def push_rep_location(body: RepLocationIn, user: Dict[str, Any] = Depends(require_roles("handlowiec", "manager", "admin"))):
+    ts = now()
+    # Fetch previous point to compute track polyline increment
+    prev = await db.rep_locations.find_one({"user_id": user["id"]}, {"_id": 0})
+    track: List[Dict[str, Any]] = list(prev.get("track", [])) if prev else []
+    # Reset track at midnight UTC (simple daily rollover)
+    if track:
+        last_ts_raw = track[-1].get("t")
+        if last_ts_raw:
+            try:
+                last_ts = datetime.fromisoformat(last_ts_raw.replace("Z", "+00:00"))
+                if last_ts.date() != ts.date():
+                    track = []  # new day — reset
+            except Exception:
+                pass
+    # Only append if moved > MIN_TRACK_DELTA_METERS from last point
+    add_point = True
+    if track:
+        last = track[-1]
+        if _haversine_m(last["lat"], last["lng"], body.latitude, body.longitude) < MIN_TRACK_DELTA_METERS:
+            add_point = False
+    if add_point:
+        track.append({"lat": body.latitude, "lng": body.longitude, "t": ts.isoformat()})
+        if len(track) > MAX_TRACK_POINTS:
+            track = track[-MAX_TRACK_POINTS:]
+
     doc = {
         "user_id": user["id"],
         "latitude": body.latitude,
@@ -500,15 +540,43 @@ async def push_rep_location(body: RepLocationIn, user: Dict[str, Any] = Depends(
         "accuracy": body.accuracy,
         "battery": body.battery,
         "battery_state": body.battery_state,
-        "updated_at": now(),
+        "is_active": True,
+        "updated_at": ts,
+        "track": track,
     }
     await db.rep_locations.update_one({"user_id": user["id"]}, {"$set": doc}, upsert=True)
-    return {"ok": True}
+    # Broadcast via WS (non-blocking scope: subs already scoped)
+    try:
+        await broadcaster.broadcast(
+            "location_update",
+            {
+                "rep_id": user["id"],
+                "rep_name": user.get("name") or user.get("email"),
+                "latitude": body.latitude,
+                "longitude": body.longitude,
+                "battery": body.battery,
+                "is_active": True,
+                "updated_at": ts.isoformat(),
+                "appended": add_point,
+            },
+            rep_id=user["id"],
+        )
+    except Exception as e:
+        logger.warning(f"WS broadcast failed: {e}")
+    return {"ok": True, "track_len": len(track)}
 
 
 @api.delete("/rep/location")
 async def stop_rep_tracking(user: Dict[str, Any] = Depends(require_roles("handlowiec", "manager", "admin"))):
-    await db.rep_locations.delete_one({"user_id": user["id"]})
+    await db.rep_locations.update_one({"user_id": user["id"]}, {"$set": {"is_active": False, "updated_at": now()}})
+    try:
+        await broadcaster.broadcast(
+            "location_stop",
+            {"rep_id": user["id"], "rep_name": user.get("name") or user.get("email"), "is_active": False},
+            rep_id=user["id"],
+        )
+    except Exception as e:
+        logger.warning(f"WS broadcast failed: {e}")
     return {"ok": True}
 
 
@@ -1348,9 +1416,14 @@ async def finance_dashboard_v2(user: Dict[str, Any] = Depends(get_current_user))
     frozen_all = [c for c in contracts_all if c["status"] == "frozen"]
     partial_all = [c for c in contracts_all if c["status"] == "partial"]
     payable_all = [c for c in contracts_all if c["status"] == "payable"]
+    cancelled_all = [c for c in contracts_all if c["status"] == "cancelled"]
+
+    # Y1: aggregations MUST exclude cancelled (accounting correctness)
+    active_all = [c for c in contracts_all if c["status"] != "cancelled"]
+    active_month = [c for c in contracts_month if c["status"] != "cancelled"]
 
     by_rep: Dict[str, Dict[str, Any]] = {}
-    for c in contracts_month:
+    for c in active_month:
         rid = c.get("rep_id") or "_unassigned"
         if rid not in by_rep:
             by_rep[rid] = {
@@ -1375,25 +1448,29 @@ async def finance_dashboard_v2(user: Dict[str, Any] = Depends(get_current_user))
             "withdrawal_days": WITHDRAWAL_DAYS,
         },
         "totals_month": {
-            "signed_count": len(contracts_month),
-            "commission_payable_sum": _sum(contracts_month, "commission_released"),
-            "commission_frozen_sum": _sum(contracts_month, "commission_frozen"),
-            "commission_total_sum": _sum(contracts_month, "commission_total"),
-            "margin_sum": _sum(contracts_month, "global_margin"),
-            "brutto_sum": _sum(contracts_month, "gross_amount"),
+            "signed_count": len(active_month),
+            "commission_payable_sum": _sum(active_month, "commission_released"),
+            "commission_frozen_sum": _sum(active_month, "commission_frozen"),
+            "commission_total_sum": _sum(active_month, "commission_total"),
+            "margin_sum": _sum(active_month, "global_margin"),
+            "brutto_sum": _sum(active_month, "gross_amount"),
+            "cancelled_count": len([c for c in contracts_month if c["status"] == "cancelled"]),
+            "cancelled_gross_sum": _sum([c for c in contracts_month if c["status"] == "cancelled"], "gross_amount"),
         },
         "totals_all_time": {
-            "signed_count": len(contracts_all),
-            "commission_payable_sum": _sum(contracts_all, "commission_released"),
-            "commission_frozen_sum": _sum(contracts_all, "commission_frozen"),
-            "commission_total_sum": _sum(contracts_all, "commission_total"),
-            "margin_sum": _sum(contracts_all, "global_margin"),
-            "brutto_sum": _sum(contracts_all, "gross_amount"),
+            "signed_count": len(active_all),
+            "commission_payable_sum": _sum(active_all, "commission_released"),
+            "commission_frozen_sum": _sum(active_all, "commission_frozen"),
+            "commission_total_sum": _sum(active_all, "commission_total"),
+            "margin_sum": _sum(active_all, "global_margin"),
+            "brutto_sum": _sum(active_all, "gross_amount"),
+            "cancelled_count": len(cancelled_all),
         },
         "by_rep": sorted(by_rep.values(), key=lambda x: x["commission_payable_sum"], reverse=True),
         "frozen_contracts": sorted(frozen_all, key=lambda x: x.get("release_date") or ""),
         "partial_contracts": sorted(partial_all, key=lambda x: x.get("signed_at") or "", reverse=True),
         "payable_contracts": sorted(payable_all, key=lambda x: x.get("signed_at") or "", reverse=True),
+        "cancelled_contracts": sorted(cancelled_all, key=lambda x: x.get("updated_at") or x.get("signed_at") or "", reverse=True),
         "contracts_month": sorted(contracts_month, key=lambda x: x.get("signed_at") or "", reverse=True),
         "contracts_all": sorted(contracts_all, key=lambda x: x.get("signed_at") or "", reverse=True),
     }
@@ -1588,3 +1665,157 @@ async def on_startup():
 @app.on_event("shutdown")
 async def on_shutdown():
     client.close()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Faza 2.0 — WebSocket rep-locations broadcaster + polyline tracks
+# ──────────────────────────────────────────────────────────────────────────────
+class LocationBroadcaster:
+    """In-memory pub/sub for live rep locations.
+    Reps (handlowiec) push location via REST PUT /rep/location which fans-out to
+    all connected admin/manager WebSockets whose scope covers that rep.
+    """
+
+    def __init__(self) -> None:
+        self._subs: Dict[str, Dict[str, Any]] = {}  # ws_id → {ws, user}
+        self._lock = asyncio.Lock()
+
+    async def subscribe(self, ws_id: str, ws: WebSocket, user: Dict[str, Any]) -> None:
+        async with self._lock:
+            self._subs[ws_id] = {"ws": ws, "user": user}
+        logger.info(f"WS subscribed: {ws_id} role={user['role']} ({len(self._subs)} total)")
+
+    async def unsubscribe(self, ws_id: str) -> None:
+        async with self._lock:
+            self._subs.pop(ws_id, None)
+        logger.info(f"WS unsubscribed: {ws_id} ({len(self._subs)} remain)")
+
+    async def broadcast(self, event_type: str, payload: Dict[str, Any], rep_id: Optional[str] = None) -> None:
+        """Send event to all subscribers whose scope includes rep_id (or admin)."""
+        if not self._subs:
+            return
+        # Pre-compute which managers can see which reps (one DB hit)
+        manager_team: Dict[str, set] = {}
+        for sub in list(self._subs.values()):
+            u = sub["user"]
+            if u["role"] == "manager" and u["id"] not in manager_team:
+                reps = await db.users.find({"manager_id": u["id"]}, {"id": 1, "_id": 0}).to_list(500)
+                manager_team[u["id"]] = {r["id"] for r in reps} | {u["id"]}
+        msg = json.dumps({"type": event_type, **payload})
+        dead_ids: List[str] = []
+        for ws_id, sub in list(self._subs.items()):
+            u = sub["user"]
+            # Scope filtering
+            if rep_id is not None:
+                if u["role"] == "handlowiec" and u["id"] != rep_id:
+                    continue
+                if u["role"] == "manager" and rep_id not in manager_team.get(u["id"], set()):
+                    continue
+            try:
+                await sub["ws"].send_text(msg)
+            except Exception:
+                dead_ids.append(ws_id)
+        for dead in dead_ids:
+            await self.unsubscribe(dead)
+
+
+broadcaster = LocationBroadcaster()
+
+
+async def _authenticate_ws(token: str) -> Optional[Dict[str, Any]]:
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        uid = payload.get("sub")
+        user = await db.users.find_one({"id": uid}, {"_id": 0, "password_hash": 0})
+        return user
+    except Exception:
+        return None
+
+
+@app.websocket("/ws/rep-locations")
+async def ws_rep_locations(ws: WebSocket):
+    """WS endpoint for live rep locations. Clients must send {"token": <jwt>} as
+    the first frame within 5s after connect to authenticate.
+    """
+    await ws.accept()
+    ws_id = str(uuid.uuid4())
+    user: Optional[Dict[str, Any]] = None
+    try:
+        # Await first frame with token
+        try:
+            auth_raw = await asyncio.wait_for(ws.receive_text(), timeout=5.0)
+            auth_msg = json.loads(auth_raw)
+            token = auth_msg.get("token")
+        except Exception:
+            await ws.close(code=4001)
+            return
+        user = await _authenticate_ws(token or "")
+        if not user:
+            await ws.send_text(json.dumps({"type": "auth_error", "detail": "Invalid token"}))
+            await ws.close(code=4001)
+            return
+        await ws.send_text(json.dumps({"type": "auth_ok", "user_id": user["id"], "role": user["role"]}))
+        await broadcaster.subscribe(ws_id, ws, user)
+
+        # Seed current snapshot for admin/manager
+        if user["role"] in ("admin", "manager"):
+            if user["role"] == "admin":
+                reps = await db.users.find({"role": "handlowiec"}, {"_id": 0, "password_hash": 0}).to_list(500)
+            else:
+                reps = await db.users.find({"manager_id": user["id"], "role": "handlowiec"}, {"_id": 0, "password_hash": 0}).to_list(500)
+            rep_ids = [r["id"] for r in reps]
+            locs = await db.rep_locations.find({"user_id": {"$in": rep_ids}}, {"_id": 0}).to_list(500)
+            await ws.send_text(json.dumps({
+                "type": "snapshot",
+                "locations": [
+                    {
+                        "rep_id": l["user_id"],
+                        "latitude": l.get("latitude"),
+                        "longitude": l.get("longitude"),
+                        "battery": l.get("battery"),
+                        "is_active": l.get("is_active"),
+                        "updated_at": iso(l.get("updated_at")),
+                        "track": l.get("track", []),  # polyline recent points
+                    }
+                    for l in locs
+                ],
+            }))
+
+        # Keepalive / handle pings
+        while True:
+            try:
+                data = await ws.receive_text()
+                # Optional ping/pong
+                try:
+                    msg = json.loads(data)
+                    if msg.get("type") == "ping":
+                        await ws.send_text(json.dumps({"type": "pong"}))
+                except Exception:
+                    pass
+            except WebSocketDisconnect:
+                break
+    finally:
+        await broadcaster.unsubscribe(ws_id)
+
+
+@api.get("/tracking/track/{rep_id}")
+async def get_rep_track(rep_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    """Return polyline points (today's track) of a given rep. Role-scoped."""
+    if user["role"] == "handlowiec" and user["id"] != rep_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if user["role"] == "manager":
+        target = await db.users.find_one({"id": rep_id}, {"manager_id": 1, "_id": 0})
+        if not target or (target.get("manager_id") != user["id"] and rep_id != user["id"]):
+            raise HTTPException(status_code=403, detail="Forbidden")
+    loc = await db.rep_locations.find_one({"user_id": rep_id}, {"_id": 0})
+    if not loc:
+        return {"rep_id": rep_id, "track": [], "updated_at": None}
+    return {
+        "rep_id": rep_id,
+        "track": loc.get("track", []),
+        "latitude": loc.get("latitude"),
+        "longitude": loc.get("longitude"),
+        "is_active": loc.get("is_active"),
+        "updated_at": iso(loc.get("updated_at")),
+    }
+

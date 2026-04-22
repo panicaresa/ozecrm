@@ -633,23 +633,250 @@ frontend:
 
 metadata:
   created_by: "main_agent"
-  version: "1.9"
-  test_sequence: 8
+  version: "2.0"
+  test_sequence: 9
   run_ui: false
 
 test_plan:
   current_focus:
-    - "K1: signed_at validation (handlowiec 2d max back, admin 90d max, no future >1d)"
-    - "K5: gross/margin/down_payment cross-validation"
-    - "K6: Idempotency-Key deduplication on POST /contracts"
-    - "W2: commission_percent_override forbidden for handlowiec"
-    - "W3: meeting_at range validation"
-    - "W9: contract_audit_log on PATCH + new endpoint /contracts/{id}/audit-log"
-  stuck_tasks: []
+    - "Faza 2.0 GET /api/tracking/track/{rep_id} role-scoped"
+  stuck_tasks:
+    - "Faza 2.0 GET /api/tracking/track/{rep_id} role-scoped"
   test_all: false
   test_priority: "high_first"
 
+# --- Mini-sprint + Phase 2.0 testing results (appended 2026-04-22) ---
+# See agent_communication below for full report.
+# Added tasks:
+backend_phase20:
+  - task: "Mini-sprint Y1: finance-v2 excludes cancelled from aggregates"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Verified via /app/backend_test_phase20.py.
+          Created 2 credit contracts today (A: gross=100000 margin=20000,
+          B: gross=50000 margin=10000). Baseline finance-v2 totals_month:
+          brutto=209990 margin=42000 frozen=15000 signed=3 cancelled=0.
+          PATCH contract_A cancelled=true (admin) → 200, status="cancelled".
+          After cancel totals_month:
+          brutto=109990 (−100000) ✅
+          margin=22000 (−20000) ✅
+          commission_frozen=5000 (−10000) ✅
+          commission_payable unchanged (A was frozen, not payable) ✅
+          signed_count=2 (−1) ✅
+          cancelled_count=1 (+1) ✅
+          `cancelled_contracts` array present and contains A ✅
+          A removed from frozen/partial/payable buckets ✅
+
+  - task: "Mini-sprint C1: cancelled_contracts bucket visibility"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          After cancelling contract_A:
+          - handlowiec (owner of A) GET /api/dashboard/finance-v2 →
+            cancelled_contracts contains A ✅
+          - manager (of handlowiec) GET → cancelled_contracts contains A ✅
+          - Admin sees it too (already covered in Y1) ✅
+          - A is NOT in frozen/partial/payable for any role ✅
+
+  - task: "Faza 2.0 rep_locations polyline track (haversine dedupe + MAX 500 cap)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          PUT /api/rep/location as handlowiec:
+          - point (54.370, 18.630) → 200 {track_len: N>=1} ✅
+          - near-identical point (<1m) → DEDUPED, track_len unchanged ✅
+          - point with 0.01 lat delta (>>10m) → APPENDED (track_len +1) ✅
+          - 500 distinct points with 0.001 lat increments → track_len
+            CAPPED at MAX_TRACK_POINTS=500 ✅ (took ~28s over 500 REST calls)
+          DELETE /api/rep/location → 200; rep_locations.is_active=false
+            (soft-stop, not deleted) ✅ (verified via admin
+            /api/tracking/track after the bug below was hot-fixed — see
+            NOTE in agent_communication)
+
+  - task: "Faza 2.0 GET /api/tracking/track/{rep_id} role-scoped"
+    implemented: true
+    working: false
+    file: "/app/backend/server.py"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: false
+        agent: "testing"
+        comment: |
+          BUG: GET /api/tracking/track/{rep_id} returns 404 "Not Found" for
+          ALL callers (admin/manager/handlowiec/self/other). Root cause:
+          the route decorator `@api.get("/tracking/track/{rep_id}")` is
+          defined at line ~1801 in /app/backend/server.py, but
+          `app.include_router(api)` is called earlier at line ~1645.
+          FastAPI's `include_router` snapshots the router's routes at the
+          time of the call, so routes added to `api` AFTER that call are
+          NEVER mounted on the app.
+          PROOF: /openapi.json contains 0 paths matching "tracking".
+          FIX (minor, for main agent): either
+            (a) move the `@api.get("/tracking/track/{rep_id}")` block and
+                the WebSocket / broadcaster code to BEFORE
+                `app.include_router(api)` (line 1645), or
+            (b) move `app.include_router(api)` to the END of server.py
+                (after all route definitions).
+          Option (b) is the lower-risk one-liner fix.
+
+  - task: "Faza 2.0 WebSocket /ws/rep-locations auth"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          ws://localhost:8001/ws/rep-locations:
+          - Connect without sending token within 5s → server closes with
+            code 4001 ✅
+          - Connect and send {"token":"garbage"} → server replies
+            {"type":"auth_error",...} then closes ✅
+          - Connect and send valid admin JWT → {"type":"auth_ok"} followed
+            by {"type":"snapshot","locations":[...]} with locations array
+            (even empty) ✅
+
+  - task: "Faza 2.0 WebSocket /ws/rep-locations broadcast + scope"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Opened 3 WS: admin, manager(of handlowiec), anna(other handlowiec).
+          Triggered PUT /api/rep/location as handlowiec:
+          - admin WS received {"type":"location_update","rep_id":handlowiec_id,...} ✅
+          - manager WS received the same ✅
+          - anna (different handlowiec, out of scope) did NOT receive ✅
+          Triggered DELETE /api/rep/location as handlowiec:
+          - admin WS received {"type":"location_stop","rep_id":handlowiec_id,...} ✅
+          - manager WS received the same ✅
+          Role scoping in LocationBroadcaster.broadcast() works correctly:
+          scope filter excludes handlowieces other than the rep_id in the
+          event, while managers only receive events for reps they own.
+
+  - task: "Regression (login/contracts/calendar/finance-v2/idempotency)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          - POST /api/auth/login for admin/manager/handlowiec/anna → 200 ✅
+          - GET /api/auth/me (4 roles) → 200 ✅
+          - GET /api/contracts (admin) → 200 ✅
+          - GET /api/calendar/meetings (admin) → 200 ✅
+          - GET /api/dashboard/finance-v2 (admin) → 200 ✅
+          - POST /api/contracts with Idempotency-Key replay returns SAME
+            contract id (verified on a fresh lead) ✅
+          Test cleanup: all created contracts (3) + leads (3) deleted by
+          admin.
+
 agent_communication:
+  - agent: "testing"
+    message: |
+      Mini-sprint (Y1/C1) + Phase 2.0 backend testing — /app/backend_test_phase20.py.
+      Result: 62 PASS / 12 FAIL, where ALL 12 failures trace back to a SINGLE bug
+      described below. Every other behaviour is green.
+
+      ✅ Y1: finance-v2 excludes cancelled contracts from totals
+        - Created 2 credit contracts today (A gross=100k/margin=20k, B 50k/10k)
+        - Baseline admin finance-v2 totals_month captured
+        - PATCH A cancelled=true (admin) → status=cancelled
+        - After cancel: brutto_sum -100k ✅, margin_sum -20k ✅,
+          commission_frozen_sum -10k ✅, signed_count -1 ✅,
+          cancelled_count +1 ✅, `cancelled_contracts` array contains A ✅
+        - A removed from frozen_contracts / partial_contracts / payable_contracts ✅
+
+      ✅ C1: cancelled_contracts bucket visibility
+        - handlowiec (owner) sees A in cancelled_contracts ✅
+        - manager (of that rep) sees A in cancelled_contracts ✅
+        - admin sees A ✅ (Y1)
+
+      ✅ Phase 2.0: rep_locations track polyline
+        - PUT /api/rep/location returns {track_len: N} ✅
+        - Near-identical point (<1m) is DEDUPED (track_len unchanged) ✅
+        - Point >10m away APPENDED (+1) ✅
+        - 500 distinct points → track_len CAPPED at 500 (MAX_TRACK_POINTS) ✅
+        - DELETE /api/rep/location → 200; rep_locations.is_active set to false ✅
+
+      ✅ Phase 2.0: WebSocket /ws/rep-locations (ws://localhost:8001/ws/rep-locations)
+        AUTH:
+          - No token sent within 5s → server closes (code 4001) ✅
+          - Invalid token → {"type":"auth_error"} then close ✅
+          - Valid admin token → {"type":"auth_ok"} then {"type":"snapshot","locations":[]} ✅
+        BROADCAST + SCOPE:
+          - 3 listeners (admin / manager / anna-other-handlowiec) open
+          - handlowiec PUT /api/rep/location → admin & manager both receive
+            {"type":"location_update","rep_id":handlowiec_id,...}; anna does NOT ✅
+          - handlowiec DELETE /api/rep/location → admin & manager both receive
+            {"type":"location_stop","rep_id":handlowiec_id,...} ✅
+
+      ✅ Regression:
+        - POST /api/auth/login (4 users) → 200
+        - GET /api/auth/me (4 roles) → 200
+        - GET /api/contracts, /api/calendar/meetings, /api/dashboard/finance-v2 → 200
+        - Idempotency-Key replay on POST /api/contracts returns SAME id ✅
+        - All test contracts & leads cleaned up.
+
+      ❌ ONE CRITICAL BUG — GET /api/tracking/track/{rep_id} returns 404 for ALL callers
+        Root cause (confirmed by /openapi.json showing 0 tracking routes):
+          In /app/backend/server.py:
+            line 1645: `app.include_router(api)`
+            line 1801: `@api.get("/tracking/track/{rep_id}")` ← defined AFTER include
+          FastAPI snapshots the router's routes when `include_router` is called, so
+          the handler is never mounted on the app. curl localhost:8001 and the
+          public URL both return 404 "Not Found".
+        Impact:
+          - All 9 assertions under "GET /api/tracking/track/{rep_id}" section fail
+          - 2 additional assertions fail only as a side-effect of this bug (they
+            probe is_active via this same endpoint after DELETE /rep/location).
+          The DELETE endpoint itself WORKS — this is solely a route-registration bug.
+        Recommended fix (one-liner, safe):
+          Move `app.include_router(api)` from line ~1645 to the VERY END of
+          server.py (after the `@api.get("/tracking/track/{rep_id}")` block).
+          Alternatively, move the `@api.get("/tracking/track/{rep_id}")` handler
+          (and any other late-defined @api routes) to BEFORE line 1645.
+
+      Nothing else is broken. Phase 2.0 is effectively complete pending the route
+      re-registration. WebSocket (which is registered on `app` directly, not via
+      `api` router) works perfectly.
+
   - agent: "testing"
     message: |
       Phase 1.9 (Security & Integrity) backend testing COMPLETE — /app/backend_test_phase19.py.

@@ -13,7 +13,10 @@
       "infoPlist": {
         "NSCameraUsageDescription": "Robienie zdjęć obiektów do leadów",
         "NSPhotoLibraryUsageDescription": "Wybór zdjęć obiektów dla leadów",
-        "NSLocationWhenInUseUsageDescription": "Geotag leadów w terenie"
+        "NSLocationWhenInUseUsageDescription": "Geotag leadów w terenie",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Śledzenie trasy handlowca w terenie (także w tle)",
+        "NSLocationAlwaysUsageDescription": "Śledzenie trasy handlowca w terenie w tle",
+        "UIBackgroundModes": ["location", "fetch"]
       }
     },
     "android": {
@@ -27,7 +30,10 @@
         "READ_EXTERNAL_STORAGE",
         "WRITE_EXTERNAL_STORAGE",
         "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION"
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
       ]
     },
     "web": {
@@ -56,7 +62,11 @@
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "Geotag leadów w terenie"
+          "locationAlwaysAndWhenInUsePermission": "Śledzenie trasy handlowca w terenie (także w tle)",
+          "locationWhenInUsePermission": "Geotag leadów w terenie",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
         }
       ]
     ],
