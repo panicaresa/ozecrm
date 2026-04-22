@@ -1642,8 +1642,6 @@ async def root():
     return {"message": "OZE CRM API", "status": "ok"}
 
 
-app.include_router(api)
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -1819,3 +1817,7 @@ async def get_rep_track(rep_id: str, user: Dict[str, Any] = Depends(get_current_
         "updated_at": iso(loc.get("updated_at")),
     }
 
+
+
+# Mount the API router LAST so all @api.* decorators above are registered.
+app.include_router(api)
