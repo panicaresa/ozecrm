@@ -46,47 +46,66 @@ export default function ManagerDashboard() {
   const [selectedRepId, setSelectedRepId] = useState<string | null>(null);
   const [layers, setLayers] = useState({ leads: true, reps: true });
   // Faza 2.0: Live WebSocket feed for reps (supplements the 30s polling)
-  const { status: wsStatus, locations: wsLocations } = useRepLocationsWS(true);
+  const ws = useRepLocationsWS(true);
+  const wsStatus = ws?.status ?? { connected: false, error: null, reconnectAttempt: 0 };
+  const wsLocations = ws?.locations ?? new Map();
 
   // Merge WS locations into reps_live (WS is more up-to-date than polling)
   const mergedReps = React.useMemo(() => {
-    const base = (data?.reps_live || []) as any[];
-    if (wsLocations.size === 0) return base;
-    const result = base.map((r) => {
-      const live = wsLocations.get(r.user_id);
-      if (!live) return r;
-      return {
-        ...r,
-        lat: live.latitude ?? r.lat,
-        lng: live.longitude ?? r.lng,
-        battery: live.battery ?? r.battery,
-        active: live.is_active ?? r.active,
-      };
-    });
-    // Add any WS-only reps not in base (newly-online)
-    for (const [rid, live] of wsLocations.entries()) {
-      if (!result.find((r) => r.user_id === rid)) {
-        result.push({
-          user_id: rid,
-          name: live.rep_name || "—",
-          lat: live.latitude,
-          lng: live.longitude,
-          battery: live.battery,
-          active: live.is_active,
-          last_seen_seconds: 0,
-        });
+    try {
+      const base = Array.isArray(data?.reps_live) ? (data!.reps_live as any[]) : [];
+      if (!wsLocations || wsLocations.size === 0) return base;
+      const result = base.map((r) => {
+        if (!r || !r.user_id) return r;
+        const live = wsLocations.get(r.user_id);
+        if (!live) return r;
+        return {
+          ...r,
+          lat: typeof live.latitude === "number" ? live.latitude : r.lat,
+          lng: typeof live.longitude === "number" ? live.longitude : r.lng,
+          battery: live.battery ?? r.battery,
+          active: live.is_active ?? r.active,
+        };
+      });
+      // Add any WS-only reps not in base (newly-online)
+      const entries = Array.from(wsLocations.entries?.() ?? []);
+      for (const [rid, live] of entries) {
+        if (!rid || !live) continue;
+        if (typeof live.latitude !== "number" || typeof live.longitude !== "number") continue;
+        if (!result.find((r: any) => r?.user_id === rid)) {
+          result.push({
+            user_id: rid,
+            name: live.rep_name || "—",
+            lat: live.latitude,
+            lng: live.longitude,
+            battery: live.battery,
+            active: live.is_active,
+            last_seen_seconds: 0,
+          });
+        }
       }
+      return result;
+    } catch {
+      return Array.isArray(data?.reps_live) ? (data!.reps_live as any[]) : [];
     }
-    return result;
   }, [data?.reps_live, wsLocations]);
 
-  // Track polylines from WS snapshot
+  // Track polylines from WS snapshot — defensive filtering of invalid points
   const tracks = React.useMemo(() => {
-    const t: Record<string, { lat: number; lng: number; t?: string }[]> = {};
-    for (const [rid, live] of wsLocations.entries()) {
-      if (live.track && live.track.length > 0) t[rid] = live.track;
+    try {
+      const t: Record<string, { lat: number; lng: number; t?: string }[]> = {};
+      const entries = Array.from(wsLocations?.entries?.() ?? []);
+      for (const [rid, live] of entries) {
+        if (!rid || !live?.track || !Array.isArray(live.track)) continue;
+        const clean = live.track.filter(
+          (p: any) => p && typeof p.lat === "number" && typeof p.lng === "number"
+        );
+        if (clean.length > 0) t[rid] = clean;
+      }
+      return t;
+    } catch {
+      return {};
     }
-    return t;
   }, [wsLocations]);
 
   const load = useCallback(async () => {

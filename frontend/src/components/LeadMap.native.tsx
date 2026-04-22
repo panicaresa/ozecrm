@@ -66,8 +66,11 @@ export const LeadMap: React.FC<Props> = ({
   onSelectRep,
   selectedRepId,
 }) => {
-  const validLeads = pins.filter((p) => typeof p.lat === "number" && typeof p.lng === "number");
-  const validReps = reps.filter((r) => typeof r.lat === "number" && typeof r.lng === "number");
+  const safePins = Array.isArray(pins) ? pins : [];
+  const safeReps = Array.isArray(reps) ? reps : [];
+  const safeTracks = tracks && typeof tracks === "object" ? tracks : {};
+  const validLeads = safePins.filter((p) => p && typeof p.lat === "number" && typeof p.lng === "number");
+  const validReps = safeReps.filter((r) => r && typeof r.lat === "number" && typeof r.lng === "number" && r.user_id);
   const anchor = validLeads[0] || validReps[0];
   const center = anchor
     ? { latitude: (anchor as any).lat, longitude: (anchor as any).lng }
@@ -93,8 +96,11 @@ export const LeadMap: React.FC<Props> = ({
           ))}
         {layers.reps &&
           validReps.map((r) => {
-            const track = tracks[r.user_id];
-            const hasTrack = track && track.length > 1;
+            const track = safeTracks[r.user_id];
+            const validTrackPoints = Array.isArray(track)
+              ? track.filter((p) => p && typeof p.lat === "number" && typeof p.lng === "number")
+              : [];
+            const hasTrack = validTrackPoints.length > 1;
             const isSelected = selectedRepId === r.user_id;
             const dotColor = r.active ? colors.secondary : "#64748B";
             return (
@@ -102,7 +108,7 @@ export const LeadMap: React.FC<Props> = ({
                 {hasTrack && (
                   <Polyline
                     key={`track-${r.user_id}`}
-                    coordinates={track.map((p) => ({ latitude: p.lat, longitude: p.lng }))}
+                    coordinates={validTrackPoints.map((p) => ({ latitude: p.lat, longitude: p.lng }))}
                     strokeWidth={isSelected ? 5 : 3}
                     strokeColor={isSelected ? colors.primary : `${colors.secondary}CC`}
                     lineCap="round"
@@ -128,7 +134,7 @@ export const LeadMap: React.FC<Props> = ({
                       {typeof r.battery === "number" && (
                         <Text style={styles.calloutMeta}>🔋 {Math.round(r.battery * 100)}%</Text>
                       )}
-                      {hasTrack && <Text style={styles.calloutMeta}>📍 {track!.length} punktów trasy</Text>}
+                      {hasTrack && <Text style={styles.calloutMeta}>📍 {validTrackPoints.length} punktów trasy</Text>}
                     </View>
                   </Callout>
                 </Marker>
