@@ -294,11 +294,11 @@ export default function ManagerDashboard() {
 
           <LeadMap
             pins={data?.pins || []}
-            reps={mergedReps}
-            tracks={tracks}
+            reps={mergedReps || []}
+            tracks={tracks || {}}
             layers={layers}
-            selectedId={selectedPinId}
-            selectedRepId={selectedRepId}
+            selectedId={selectedPinId || null}
+            selectedRepId={selectedRepId || null}
             onSelectPin={(id) => {
               setSelectedPinId(id);
               setFilterStatus(null);

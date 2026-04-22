@@ -42,8 +42,15 @@ interface Props {
   selectedRepId?: string | null;
 }
 
-function repInitials(name: string) {
-  return name.split(" ").map((p) => p[0]).join("").slice(0, 2).toUpperCase();
+function repInitials(name?: string | null) {
+  if (!name || typeof name !== "string") return "?";
+  try {
+    const parts = name.split(" ").filter(Boolean);
+    if (parts.length === 0) return "?";
+    return parts.map((p) => p?.[0] || "").join("").slice(0, 2).toUpperCase() || "?";
+  } catch {
+    return "?";
+  }
 }
 
 function formatWorkTime(s?: number | null) {
@@ -84,7 +91,7 @@ export const LeadMap: React.FC<Props> = ({
         initialRegion={{ ...center, latitudeDelta: 0.3, longitudeDelta: 0.3 }}
       >
         {layers.leads &&
-          validLeads.map((p) => (
+          validLeads?.map((p) => (
             <Marker
               key={`lead-${p.id}`}
               coordinate={{ latitude: p.lat!, longitude: p.lng! }}
@@ -95,8 +102,8 @@ export const LeadMap: React.FC<Props> = ({
             />
           ))}
         {layers.reps &&
-          validReps.map((r) => {
-            const track = safeTracks[r.user_id];
+          validReps?.map((r) => {
+            const track = safeTracks?.[r.user_id];
             const validTrackPoints = Array.isArray(track)
               ? track.filter((p) => p && typeof p.lat === "number" && typeof p.lng === "number")
               : [];
@@ -108,7 +115,7 @@ export const LeadMap: React.FC<Props> = ({
                 {hasTrack && (
                   <Polyline
                     key={`track-${r.user_id}`}
-                    coordinates={validTrackPoints.map((p) => ({ latitude: p.lat, longitude: p.lng }))}
+                    coordinates={validTrackPoints?.map((p) => ({ latitude: p.lat, longitude: p.lng })) || []}
                     strokeWidth={isSelected ? 5 : 3}
                     strokeColor={isSelected ? colors.primary : `${colors.secondary}CC`}
                     lineCap="round"
