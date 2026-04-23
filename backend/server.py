@@ -192,6 +192,7 @@ class LeadIn(BaseModel):
     phone: Optional[str] = None
     address: Optional[str] = None
     postal_code: Optional[str] = None
+    apartment_number: Optional[str] = None  # nr mieszkania / klatki (Sprint 1)
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     note: Optional[str] = None
@@ -201,6 +202,10 @@ class LeadIn(BaseModel):
     building_type: Optional[str] = None
     assigned_to: Optional[str] = None
     meeting_at: Optional[str] = None  # ISO datetime for "umowione" status
+    # Sprint 1 — anti-collision v2: handlowiec acknowledges a soft-warning
+    # (lead exists 15-75m away) and confirms it's a different customer.
+    # Request-only field (never stored as-is; expanded to nearby_override_* fields).
+    confirmed_nearby_duplicate: Optional[bool] = False
 
 
 class LeadUpdate(BaseModel):
@@ -208,6 +213,7 @@ class LeadUpdate(BaseModel):
     phone: Optional[str] = None
     address: Optional[str] = None
     postal_code: Optional[str] = None
+    apartment_number: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     note: Optional[str] = None
@@ -464,7 +470,11 @@ async def create_lead(body: LeadIn, user: Dict[str, Any] = Depends(get_current_u
         if parsed_m > cur + timedelta(days=730):
             raise HTTPException(status_code=400, detail="Termin spotkania nie może być później niż 2 lata w przód.")
 
-    # Faza 2.1 — Radar Dubli (anti-collision 50m)
+    # Sprint 1 — anti-collision v2 (two-tier: hard-stop <15m, soft-warn 15-75m)
+    # apartment_number on BOTH leads, if different → treat as separate units in the same building
+    override_info: Optional[Dict[str, Any]] = None
+    NEAR_HARD_M = 15.0
+    NEAR_SOFT_M = 75.0
     if body.latitude is not None and body.longitude is not None:
         # Coarse box filter first (~0.001 deg ≈ 111m), then precise haversine
         box = 0.001
@@ -474,7 +484,17 @@ async def create_lead(body: LeadIn, user: Dict[str, Any] = Depends(get_current_u
                 "longitude": {"$gte": body.longitude - box, "$lte": body.longitude + box},
                 "status": {"$nin": ["nie_zainteresowany"]},
             },
-            {"_id": 0, "latitude": 1, "longitude": 1, "assigned_to": 1, "owner_manager_id": 1, "client_name": 1, "created_at": 1},
+            {
+                "_id": 0,
+                "id": 1,
+                "latitude": 1,
+                "longitude": 1,
+                "assigned_to": 1,
+                "owner_manager_id": 1,
+                "client_name": 1,
+                "created_at": 1,
+                "apartment_number": 1,
+            },
         ).to_list(100)
         six_months_ago = now() - timedelta(days=180)
         for cand in nearby_candidates:
@@ -486,19 +506,63 @@ async def create_lead(body: LeadIn, user: Dict[str, Any] = Depends(get_current_u
             if lat2 is None or lng2 is None:
                 continue
             dist = _haversine_m(body.latitude, body.longitude, lat2, lng2)
-            if dist < 50.0:
-                # Resolve owner for error message
-                owner_name = "innego handlowca"
-                if cand.get("assigned_to"):
-                    owner = await db.users.find_one(
-                        {"id": cand["assigned_to"]}, {"_id": 0, "name": 1, "email": 1}
-                    )
-                    if owner:
-                        owner_name = owner.get("name") or owner.get("email") or owner_name
+            if dist >= NEAR_SOFT_M:
+                continue  # far enough — no constraint
+
+            # Resolve owner for error payloads
+            owner_name = "innego handlowca"
+            if cand.get("assigned_to"):
+                owner = await db.users.find_one(
+                    {"id": cand["assigned_to"]}, {"_id": 0, "name": 1, "email": 1}
+                )
+                if owner:
+                    owner_name = owner.get("name") or owner.get("email") or owner_name
+
+            if dist < NEAR_HARD_M:
+                # Hard collision: same spot. Escape hatch only when BOTH leads have
+                # apartment_number filled AND they differ (e.g. different flats in
+                # the same building).
+                candidate_apt = (cand.get("apartment_number") or "").strip().lower()
+                body_apt = ((body.apartment_number or "").strip().lower())
+                if candidate_apt and body_apt and candidate_apt != body_apt:
+                    continue  # different units in same building — OK
+
                 raise HTTPException(
                     status_code=409,
-                    detail=f"Zbyt blisko! Pod tym adresem istnieje już lead w systemie. Należy on do {owner_name}.",
+                    detail={
+                        "code": "LEAD_DUPLICATE_HARD",
+                        "message": f"Tutaj jest już lead: {cand.get('client_name')}. Przypisany do: {owner_name}.",
+                        "existing_lead_id": cand.get("id"),
+                        "existing_lead_name": cand.get("client_name"),
+                        "existing_assigned_to_name": owner_name,
+                        "distance_m": round(dist, 1),
+                    },
                 )
+
+            # Soft-warning range (NEAR_HARD_M <= dist < NEAR_SOFT_M)
+            if not body.confirmed_nearby_duplicate:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "LEAD_NEARBY_SOFT",
+                        "message": (
+                            f"W pobliżu ({round(dist)} m) jest już lead: "
+                            f"{cand.get('client_name')} (przypisany do: {owner_name}). "
+                            f"Czy to inny klient?"
+                        ),
+                        "existing_lead_id": cand.get("id"),
+                        "existing_lead_name": cand.get("client_name"),
+                        "existing_assigned_to_name": owner_name,
+                        "distance_m": round(dist, 1),
+                    },
+                )
+            # Handlowiec confirmed → persist override audit fields and stop scanning.
+            override_info = {
+                "nearby_override_confirmed": True,
+                "nearby_override_other_lead_id": cand.get("id"),
+                "nearby_override_distance_m": round(dist, 1),
+            }
+            break
 
     lead_id = str(uuid.uuid4())
     assigned = body.assigned_to or (user["id"] if user["role"] == "handlowiec" else None)
@@ -508,6 +572,12 @@ async def create_lead(body: LeadIn, user: Dict[str, Any] = Depends(get_current_u
     elif user["role"] == "handlowiec" and user.get("manager_id"):
         owner_manager = user["manager_id"]
     doc = body.dict()
+    # Sprint 1: confirmed_nearby_duplicate is request-only; strip + replace with audit fields
+    doc.pop("confirmed_nearby_duplicate", None)
+    if override_info:
+        doc.update(override_info)
+    else:
+        doc.setdefault("nearby_override_confirmed", False)
     # Parse meeting_at properly if provided — store as ISO string for consistency with legacy/PATCHed leads
     if body.meeting_at:
         parsed = _parse_iso_dt(body.meeting_at)
@@ -856,6 +926,59 @@ async def rep_profile(user_id: str, user: Dict[str, Any] = Depends(get_current_u
             total_payable += float(derived.get("commission_released") or 0)
             total_frozen += float(derived.get("commission_frozen") or 0)
 
+    # Sprint 1 — anti-collision override stats
+    override_total = 0
+    override_this_month = 0
+    recent_overrides: List[Dict[str, Any]] = []
+    try:
+        cur_utc = now()
+        month_start = cur_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        override_leads = (
+            await db.leads.find(
+                {"assigned_to": user_id, "nearby_override_confirmed": True},
+                {
+                    "_id": 0,
+                    "id": 1,
+                    "client_name": 1,
+                    "created_at": 1,
+                    "nearby_override_other_lead_id": 1,
+                    "nearby_override_distance_m": 1,
+                },
+            )
+            .sort("created_at", -1)
+            .to_list(500)
+        )
+        override_total = len(override_leads)
+        for ol in override_leads:
+            created = _parse_iso_dt(ol.get("created_at"))
+            if isinstance(ol.get("created_at"), datetime):
+                created = ol["created_at"]
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+            if created and created >= month_start:
+                override_this_month += 1
+        # Build recent_overrides (max 10) — resolve other_lead_client_name
+        for ol in override_leads[:10]:
+            other_id = ol.get("nearby_override_other_lead_id")
+            other_name = None
+            if other_id:
+                other_doc = await db.leads.find_one(
+                    {"id": other_id}, {"_id": 0, "client_name": 1}
+                )
+                if other_doc:
+                    other_name = other_doc.get("client_name")
+            recent_overrides.append(
+                {
+                    "lead_id": ol.get("id"),
+                    "lead_client_name": ol.get("client_name"),
+                    "other_lead_client_name": other_name,
+                    "distance_m": ol.get("nearby_override_distance_m"),
+                    "created_at": iso(ol.get("created_at")),
+                }
+            )
+    except Exception as e:
+        logger.warning(f"override_stats build failed for user {user_id}: {e}")
+
     return {
         "user": serialize_user(target),
         "kpi": {
@@ -872,6 +995,11 @@ async def rep_profile(user_id: str, user: Dict[str, Any] = Depends(get_current_u
         "status_breakdown": status_breakdown,
         "leads": leads_raw[:50],
         "track": loc.get("track", []) if loc else [],
+        "override_stats": {
+            "total": override_total,
+            "this_month": override_this_month,
+            "recent_overrides": recent_overrides,
+        },
     }
 
 
@@ -1810,6 +1938,15 @@ async def ensure_indexes_and_migrations():
         )
     except Exception as e:
         logger.warning(f"must_change_password migration skipped: {e}")
+
+    # Sprint 1 — anti-collision v2: defensive migration for override flag
+    try:
+        await db.leads.update_many(
+            {"nearby_override_confirmed": {"$exists": False}},
+            {"$set": {"nearby_override_confirmed": False}},
+        )
+    except Exception as e:
+        logger.warning(f"nearby_override_confirmed migration skipped: {e}")
 
     existing_settings = await db.settings.find_one({"id": "global"})
     if not existing_settings:

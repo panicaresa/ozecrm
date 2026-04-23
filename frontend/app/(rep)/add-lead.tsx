@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   Platform,
   Image,
   Alert,
+  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
@@ -27,12 +28,17 @@ const BUILDING_TYPES: { value: "mieszkalny" | "gospodarczy"; label: string }[] =
   { value: "gospodarczy", label: "Gospodarczy" },
 ];
 
+// Sprint 1 — GPS precision thresholds
+const GPS_TARGET_ACCURACY_M = 20; // good precision
+const GPS_HINT_TIMEOUT_MS = 30_000; // show hint after 30s
+
 export default function AddLead() {
   const router = useRouter();
   const [clientName, setClientName] = useState("");
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
   const [zip, setZip] = useState("");
+  const [apartmentNumber, setApartmentNumber] = useState("");
   const [note, setNote] = useState("");
   const [area, setArea] = useState("");
   const [buildingType, setBuildingType] = useState<"mieszkalny" | "gospodarczy">("mieszkalny");
@@ -45,20 +51,76 @@ export default function AddLead() {
   const [err, setErr] = useState<string | null>(null);
   const [locating, setLocating] = useState(false);
 
+  // Sprint 1 — GPS precision loop state
+  const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
+  const gpsWatchSubRef = useRef<Location.LocationSubscription | null>(null);
+  const gpsHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [gpsHintShown, setGpsHintShown] = useState(false);
+
+  // Sprint 1 — focus hint for apartment field (set after hard-collision alert)
+  const [apartmentHighlight, setApartmentHighlight] = useState(false);
+
+  // Cleanup GPS watch subscription when component unmounts
+  useEffect(() => {
+    return () => {
+      try {
+        gpsWatchSubRef.current?.remove();
+      } catch {}
+      if (gpsHintTimerRef.current) clearTimeout(gpsHintTimerRef.current);
+    };
+  }, []);
+
+  const stopGpsWatch = () => {
+    try {
+      gpsWatchSubRef.current?.remove();
+    } catch {}
+    gpsWatchSubRef.current = null;
+    if (gpsHintTimerRef.current) {
+      clearTimeout(gpsHintTimerRef.current);
+      gpsHintTimerRef.current = null;
+    }
+  };
+
   const getLocation = async () => {
+    // Reset state + restart watch
+    stopGpsWatch();
+    setGpsHintShown(false);
+    setGpsAccuracy(null);
     setLocating(true);
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
         Alert.alert("Brak uprawnień", "Nie udało się pobrać lokalizacji. Udziel uprawnień w ustawieniach.");
+        setLocating(false);
         return;
       }
-      const loc = await Location.getCurrentPositionAsync({});
-      setLatitude(loc.coords.latitude);
-      setLongitude(loc.coords.longitude);
+      // Start hint timer
+      gpsHintTimerRef.current = setTimeout(() => {
+        setGpsHintShown(true);
+      }, GPS_HINT_TIMEOUT_MS);
+
+      const sub = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.Highest,
+          timeInterval: 1000,
+          distanceInterval: 0,
+        },
+        (loc) => {
+          setLatitude(loc.coords.latitude);
+          setLongitude(loc.coords.longitude);
+          const acc = typeof loc.coords.accuracy === "number" ? loc.coords.accuracy : null;
+          setGpsAccuracy(acc);
+          // If we already hit the target, we keep the watch running but
+          // user can stop it manually via "Odśwież" / save. It auto-cleans
+          // on unmount. No forced stop — GPS can still refine further.
+          if (acc != null && acc <= GPS_TARGET_ACCURACY_M) {
+            setLocating(false);
+          }
+        }
+      );
+      gpsWatchSubRef.current = sub;
     } catch (e: any) {
       Alert.alert("Błąd lokalizacji", e?.message || "Nie udało się pobrać pozycji");
-    } finally {
       setLocating(false);
     }
   };
@@ -86,8 +148,90 @@ export default function AddLead() {
     }
   };
 
+  const performSave = async (extra: Record<string, any> = {}) => {
+    const body: Record<string, any> = {
+      client_name: clientName.trim(),
+      phone: phone.trim() || null,
+      address: address.trim() || null,
+      postal_code: zip.trim() || null,
+      apartment_number: apartmentNumber.trim() || null,
+      note: note.trim() || null,
+      building_area: area ? Number(area.replace(",", ".")) : null,
+      building_type: buildingType,
+      status,
+      latitude,
+      longitude,
+      photo_base64: photo,
+      meeting_at: meetingAt ? meetingAt.toISOString() : null,
+      ...extra,
+    };
+    await api.post("/leads", body);
+    stopGpsWatch();
+    router.back();
+  };
+
+  const handleCollisionError = (e: any): boolean => {
+    // Returns true if we handled the error with a dialog, false if caller should setErr.
+    const detail = e?.response?.data?.detail;
+    const status = e?.response?.status;
+    if (status !== 409 || !detail || typeof detail !== "object") return false;
+
+    if (detail.code === "LEAD_NEARBY_SOFT") {
+      Alert.alert(
+        "⚠️ Lead w pobliżu",
+        `${detail.message}\n\nCzy TO NA PEWNO inny klient?`,
+        [
+          { text: "Anuluj", style: "cancel" },
+          {
+            text: "Tak, to inny klient",
+            onPress: async () => {
+              setBusy(true);
+              try {
+                await performSave({ confirmed_nearby_duplicate: true });
+              } catch (err) {
+                setErr(formatApiError(err, "Nie udało się zapisać leada"));
+              } finally {
+                setBusy(false);
+              }
+            },
+          },
+        ]
+      );
+      return true;
+    }
+
+    if (detail.code === "LEAD_DUPLICATE_HARD") {
+      Alert.alert(
+        "🔴 Lead już istnieje",
+        String(detail.message || "Pod tym adresem jest już lead."),
+        [
+          { text: "Anuluj", style: "cancel" },
+          {
+            text: "Otwórz istniejący",
+            onPress: () => {
+              if (detail.existing_lead_id) {
+                router.replace(`/(rep)/lead/${detail.existing_lead_id}` as any);
+              }
+            },
+          },
+          {
+            text: "To inny klient — dodaj nr mieszkania",
+            onPress: () => {
+              setApartmentHighlight(true);
+              // Stay on the screen so user can fill apartment_number and retry save.
+            },
+          },
+        ]
+      );
+      return true;
+    }
+
+    return false;
+  };
+
   const save = async () => {
     setErr(null);
+    setApartmentHighlight(false);
     if (!clientName.trim()) {
       setErr("Podaj imię i nazwisko klienta");
       return;
@@ -102,25 +246,32 @@ export default function AddLead() {
       setErr('Dla statusu „Umówione" ustaw datę i godzinę spotkania.');
       return;
     }
+    // Sprint 1 — warn on low GPS accuracy before submitting
+    if (
+      latitude !== null &&
+      longitude !== null &&
+      gpsAccuracy !== null &&
+      gpsAccuracy > 50
+    ) {
+      const ok = await new Promise<boolean>((resolve) => {
+        Alert.alert(
+          "Słaba precyzja GPS",
+          `Lokalizacja może być niedokładna (±${Math.round(gpsAccuracy)} m) — system może wykryć duplikat fałszywie. Kontynuować?`,
+          [
+            { text: "Anuluj", style: "cancel", onPress: () => resolve(false) },
+            { text: "Tak, zapisuj", onPress: () => resolve(true) },
+          ]
+        );
+      });
+      if (!ok) return;
+    }
     setBusy(true);
     try {
-      await api.post("/leads", {
-        client_name: clientName.trim(),
-        phone: phone.trim() || null,
-        address: address.trim() || null,
-        postal_code: zip.trim() || null,
-        note: note.trim() || null,
-        building_area: area ? Number(area.replace(",", ".")) : null,
-        building_type: buildingType,
-        status,
-        latitude,
-        longitude,
-        photo_base64: photo,
-        meeting_at: meetingAt ? meetingAt.toISOString() : null,
-      });
-      router.back();
-    } catch (e) {
-      setErr(formatApiError(e, "Nie udało się zapisać leada"));
+      await performSave();
+    } catch (e: any) {
+      if (!handleCollisionError(e)) {
+        setErr(formatApiError(e, "Nie udało się zapisać leada"));
+      }
     } finally {
       setBusy(false);
     }
@@ -154,6 +305,19 @@ export default function AddLead() {
           <Field label="Telefon" placeholder="+48 ..." value={phone} onChangeText={setPhone} keyboardType="phone-pad" testID="lead-phone-input" />
           <Field label="Adres" placeholder="Ulica, miasto" value={address} onChangeText={setAddress} testID="lead-address-input" />
           <Field label="Kod pocztowy" placeholder="00-000" value={zip} onChangeText={setZip} testID="lead-zip-input" />
+          <View style={apartmentHighlight ? styles.apartmentHighlight : undefined}>
+            <Field
+              label="Numer mieszkania / klatki (opcjonalne)"
+              placeholder="np. 12A, m. 5, klatka II"
+              value={apartmentNumber}
+              onChangeText={(v) => {
+                setApartmentNumber(v);
+                if (apartmentHighlight) setApartmentHighlight(false);
+              }}
+              testID="lead-apartment-input"
+            />
+            <Text style={styles.apartmentHint}>Dla kamienic, bloków i budynków wielorodzinnych</Text>
+          </View>
 
           <Text style={styles.sectionLabel}>Obiekt</Text>
           <View style={styles.pills}>
@@ -212,18 +376,61 @@ export default function AddLead() {
             style={{ height: 80, textAlignVertical: "top" }}
           />
 
-          {/* Geotag */}
-          <TouchableOpacity style={styles.geoBox} onPress={getLocation} testID="geotag-button" activeOpacity={0.8}>
-            <Feather name={latitude ? "check-circle" : "map-pin"} size={18} color={latitude ? colors.success : colors.secondary} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.geoTitle}>
-                {latitude ? "Geotag zapisany" : locating ? "Pobieranie..." : "Pobierz lokalizację"}
-              </Text>
-              {latitude !== null && longitude !== null && (
-                <Text style={styles.geoCoords}>{latitude.toFixed(5)}, {longitude.toFixed(5)}</Text>
-              )}
-            </View>
-          </TouchableOpacity>
+          {/* GPS widget — Sprint 1 with precision loop */}
+          {(() => {
+            const hasCoords = latitude !== null && longitude !== null;
+            const acc = gpsAccuracy;
+            const isGood = acc != null && acc <= GPS_TARGET_ACCURACY_M;
+            const isWeak = acc != null && acc > GPS_TARGET_ACCURACY_M;
+            const showHint = gpsHintShown && isWeak;
+            let label = "📍 Pobierz lokalizację";
+            if (locating && !hasCoords) label = "📍 Pobieranie GPS...";
+            else if (hasCoords) label = "📍 Lokalizacja GPS";
+
+            return (
+              <View style={[styles.gpsCard, isGood && styles.gpsCardGood, isWeak && styles.gpsCardWeak]} testID="gps-widget">
+                <View style={styles.gpsRow}>
+                  <Feather
+                    name={isGood ? "check-circle" : "map-pin"}
+                    size={18}
+                    color={isGood ? colors.success : isWeak ? colors.error : colors.secondary}
+                  />
+                  <Text style={styles.gpsTitle}>{label}</Text>
+                  {locating && !isGood && <ActivityIndicator size="small" color={colors.secondary} />}
+                </View>
+                {hasCoords && (
+                  <Text style={styles.gpsCoords} testID="gps-coords">
+                    {latitude!.toFixed(5)}, {longitude!.toFixed(5)}
+                  </Text>
+                )}
+                {acc != null && (
+                  <Text
+                    style={[
+                      styles.gpsAcc,
+                      isGood && { color: colors.success },
+                      isWeak && { color: colors.error, fontWeight: "800" },
+                    ]}
+                    testID="gps-accuracy"
+                  >
+                    {isGood
+                      ? `±${Math.round(acc)} m (dobra precyzja) ✓`
+                      : `±${Math.round(acc)} m ${locating ? "(czekamy na <20 m)" : "(słaba precyzja ⚠️)"}`}
+                  </Text>
+                )}
+                {showHint && (
+                  <Text style={styles.gpsHint}>
+                    💡 Spróbuj wyjść z budynku lub podejść bliżej ulicy. GPS potrzebuje otwartego nieba.
+                  </Text>
+                )}
+                <View style={styles.gpsActions}>
+                  <TouchableOpacity onPress={getLocation} style={styles.gpsBtn} testID="gps-refresh-button">
+                    <Feather name="refresh-cw" size={14} color={colors.secondary} />
+                    <Text style={styles.gpsBtnText}>Odśwież</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            );
+          })()}
 
           {!!err && <Text style={{ color: colors.error, marginTop: 8 }}>{err}</Text>}
         </ScrollView>
@@ -256,5 +463,20 @@ const styles = StyleSheet.create({
   geoBox: { flexDirection: "row", alignItems: "center", gap: 12, padding: 14, backgroundColor: colors.paper, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, marginTop: 8 },
   geoTitle: { fontWeight: "700", color: colors.textPrimary, fontSize: 14 },
   geoCoords: { color: colors.textSecondary, fontSize: 12, marginTop: 2 },
+  // Sprint 1 — GPS widget
+  gpsCard: { padding: spacing.md, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.paper, marginTop: 8 },
+  gpsCardGood: { borderColor: colors.success, backgroundColor: "#ECFDF5" },
+  gpsCardWeak: { borderColor: colors.error, backgroundColor: "#FEF2F2" },
+  gpsRow: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 6 },
+  gpsTitle: { fontWeight: "800", color: colors.textPrimary, fontSize: 14, flex: 1 },
+  gpsCoords: { color: colors.textPrimary, fontSize: 13, fontWeight: "700", marginBottom: 2 },
+  gpsAcc: { color: colors.textSecondary, fontSize: 12, marginBottom: 4 },
+  gpsHint: { color: colors.textPrimary, fontSize: 12, marginTop: 6, lineHeight: 17 },
+  gpsActions: { flexDirection: "row", gap: 8, marginTop: 10 },
+  gpsBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.bg },
+  gpsBtnText: { color: colors.secondary, fontSize: 12, fontWeight: "700" },
+  // Sprint 1 — apartment_number highlight (pokaże się po hard-collision alert)
+  apartmentHighlight: { borderWidth: 2, borderColor: colors.primary, borderRadius: radius.md, padding: 6, marginBottom: 4 },
+  apartmentHint: { color: colors.textSecondary, fontSize: 11, marginTop: -8, marginBottom: 12, marginLeft: 2 },
   footer: { padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.paper },
 });

@@ -330,6 +330,23 @@ export const LeadDetailScreen: React.FC<{ leadId: string; backLabel?: string }> 
             <Text style={styles.name}>{lead.client_name}</Text>
             {!!lead.phone && (<View style={styles.row}><Feather name="phone" size={14} color={colors.textSecondary} /><Text style={styles.rowText}>{lead.phone}</Text></View>)}
             {!!lead.address && (<View style={styles.row}><Feather name="map-pin" size={14} color={colors.textSecondary} /><Text style={styles.rowText}>{lead.address}</Text></View>)}
+            {!!lead.apartment_number && (
+              <View style={styles.row}>
+                <Feather name="home" size={14} color={colors.textSecondary} />
+                <Text style={styles.rowText}>Mieszkanie: {lead.apartment_number}</Text>
+              </View>
+            )}
+            {!!lead.nearby_override_confirmed && (
+              <View style={[styles.row, { backgroundColor: "#FFF7ED", padding: 6, borderRadius: 6, marginTop: 4 }]}>
+                <Feather name="alert-circle" size={14} color="#EA580C" />
+                <Text style={[styles.rowText, { color: "#9A3412", fontSize: 12 }]}>
+                  Override anti-kolizji
+                  {typeof lead.nearby_override_distance_m === "number"
+                    ? ` · ${Math.round(lead.nearby_override_distance_m)} m od innego leada`
+                    : ""}
+                </Text>
+              </View>
+            )}
             {!!lead.building_area && (
               <View style={styles.row}>
                 <Feather name="home" size={14} color={colors.textSecondary} />

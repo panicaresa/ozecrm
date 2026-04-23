@@ -30,6 +30,7 @@ export interface LayerState {
 interface Props {
   pins: MapPin[];
   reps?: RepPin[];
+  tracks?: Record<string, { lat: number; lng: number; t?: string }[]>; // ignored on web (Sprint 1: prop parity with native)
   height?: number;
   testID?: string;
   selectedId?: string | null;

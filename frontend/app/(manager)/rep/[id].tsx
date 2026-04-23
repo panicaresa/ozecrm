@@ -18,6 +18,14 @@ import { fmtDuration, fmtDistanceKm } from "../../../src/lib/useWorkStatus";
 import { fmtPln } from "../../../src/lib/offerEngine";
 import { LeadMap } from "../../../src/components/LeadMap";
 
+interface OverrideEntry {
+  lead_id: string;
+  lead_client_name?: string | null;
+  other_lead_client_name?: string | null;
+  distance_m?: number | null;
+  created_at?: string | null;
+}
+
 interface Profile {
   user: { id: string; name?: string; email: string; role: string; manager_id?: string };
   kpi: {
@@ -34,6 +42,11 @@ interface Profile {
   status_breakdown: Record<string, number>;
   leads: any[];
   track: { lat: number; lng: number; t?: string }[];
+  override_stats?: {
+    total: number;
+    this_month: number;
+    recent_overrides: OverrideEntry[];
+  };
 }
 
 export default function ManagerRepProfile() {
@@ -215,6 +228,64 @@ export default function ManagerRepProfile() {
           </View>
         )}
 
+        {/* Sprint 1 — Override'y anti-collision (widoczne tylko gdy total>0) */}
+        {!!data.override_stats && data.override_stats.total > 0 && (
+          <View style={styles.overrideCard} testID="override-stats-section">
+            <Text style={styles.sectionLabel}>Override'y anti-collision</Text>
+            <View style={styles.overrideTopRow}>
+              <View style={styles.overrideStat}>
+                <Text style={styles.overrideStatValue}>{data.override_stats.this_month}</Text>
+                <Text style={styles.overrideStatLabel}>w tym miesiącu</Text>
+              </View>
+              <View style={styles.overrideDivider} />
+              <View style={styles.overrideStat}>
+                <Text style={styles.overrideStatValue}>{data.override_stats.total}</Text>
+                <Text style={styles.overrideStatLabel}>łącznie</Text>
+              </View>
+            </View>
+            {data.override_stats.recent_overrides.length > 0 && (
+              <View style={{ marginTop: 12 }}>
+                <Text style={styles.overrideSubHeader}>Ostatnie:</Text>
+                {data.override_stats.recent_overrides.map((o) => {
+                  const ago = (() => {
+                    if (!o.created_at) return "";
+                    try {
+                      const d = new Date(o.created_at);
+                      const days = Math.max(0, Math.round((Date.now() - d.getTime()) / 86400000));
+                      if (days === 0) return "dziś";
+                      if (days === 1) return "wczoraj";
+                      return `${days} dni temu`;
+                    } catch {
+                      return "";
+                    }
+                  })();
+                  return (
+                    <TouchableOpacity
+                      key={o.lead_id}
+                      style={styles.overrideRow}
+                      onPress={() => router.push(`/(manager)/lead/${o.lead_id}` as any)}
+                      testID={`override-entry-${o.lead_id}`}
+                      activeOpacity={0.7}
+                    >
+                      <Feather name="alert-circle" size={14} color="#EA580C" />
+                      <Text style={styles.overrideRowText} numberOfLines={2}>
+                        <Text style={{ fontWeight: "800" }}>{o.lead_client_name || "—"}</Text>
+                        {o.distance_m != null ? ` (${Math.round(o.distance_m)} m` : " ("}
+                        {o.other_lead_client_name ? ` od ${o.other_lead_client_name}` : ""}
+                        {ago ? `, ${ago})` : ")"}
+                      </Text>
+                      <Feather name="chevron-right" size={14} color={colors.textSecondary} />
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+            <Text style={styles.overrideHint}>
+              💡 Override'y pokazują przypadki gdzie system ostrzegł o bliskim istniejącym leadzie, ale handlowiec potwierdził że to inny klient.
+            </Text>
+          </View>
+        )}
+
         {/* Status breakdown */}
         <View style={styles.statusCard}>
           <Text style={styles.sectionLabel}>Lejek statusów</Text>
@@ -299,6 +370,17 @@ const styles = StyleSheet.create({
   statusCount: { fontSize: 14, fontWeight: "900", color: colors.textPrimary },
   leadsCard: { backgroundColor: colors.paper, borderRadius: radius.lg, padding: spacing.md, marginTop: 12, borderWidth: 1, borderColor: colors.border },
   leadRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.zinc100 },
+  // Sprint 1 — override stats card
+  overrideCard: { backgroundColor: "#FFFBEB", borderRadius: radius.lg, padding: spacing.md, marginTop: 12, borderWidth: 1, borderColor: "#FCD34D" },
+  overrideTopRow: { flexDirection: "row", alignItems: "center", marginTop: 6 },
+  overrideStat: { flex: 1, alignItems: "center" },
+  overrideStatValue: { fontSize: 22, fontWeight: "900", color: "#92400E" },
+  overrideStatLabel: { fontSize: 11, color: "#78350F", marginTop: 2, textTransform: "uppercase", letterSpacing: 0.5 },
+  overrideDivider: { width: 1, height: 30, backgroundColor: "#FCD34D" },
+  overrideSubHeader: { fontSize: 12, fontWeight: "800", color: "#78350F", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 },
+  overrideRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 8, borderTopWidth: 1, borderTopColor: "#FDE68A" },
+  overrideRowText: { flex: 1, fontSize: 12, color: "#78350F" },
+  overrideHint: { marginTop: 10, fontSize: 11, color: "#92400E", lineHeight: 16, fontStyle: "italic" },
   leadName: { fontSize: 13, fontWeight: "800", color: colors.textPrimary },
   leadSub: { fontSize: 11, color: colors.textSecondary, marginTop: 2 },
   empty: { color: colors.textSecondary, textAlign: "center", padding: 12, fontSize: 13 },

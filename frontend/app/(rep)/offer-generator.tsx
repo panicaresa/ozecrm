@@ -192,7 +192,6 @@ export default function OfferGenerator() {
         rrsoLabel: `${rrsoRates[rrsoIdx]?.label || "Bank"} RRSO ${rrsoRates[rrsoIdx]?.value}%`,
         intro,
         logoDataUrl: LOGO_PNG_BASE64,
-        logoRemoteUrl: "https://grupaoze.pl/wp-content/uploads/2025/12/x1.png.pagespeed.ic.FHpTwhhqvK.webp",
       });
 
       if (Platform.OS === "web") {

@@ -8,6 +8,8 @@ export interface Lead {
   client_name: string;
   status: string;
   address?: string;
+  postal_code?: string;
+  apartment_number?: string | null;
   phone?: string;
   latitude?: number;
   longitude?: number;
@@ -17,6 +19,9 @@ export interface Lead {
   assigned_to?: string;
   note?: string;
   meeting_at?: string | null;
+  nearby_override_confirmed?: boolean;
+  nearby_override_other_lead_id?: string | null;
+  nearby_override_distance_m?: number | null;
 }
 
 export const LeadCard: React.FC<{ lead: Lead; onPress?: () => void; testID?: string }> = ({ lead, onPress, testID }) => {

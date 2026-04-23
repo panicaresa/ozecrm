@@ -221,7 +221,7 @@ export default function RepHome() {
               router.push("/(rep)/offer-generator");
             }}
             testID="open-offer-generator-button"
-            style={[!working ? { opacity: 0.5 } : undefined, { marginTop: 10 }]}
+            style={{ ...(!working && { opacity: 0.5 }), marginTop: 10 }}
           />
           <Button
             title="Kalendarz spotkań"

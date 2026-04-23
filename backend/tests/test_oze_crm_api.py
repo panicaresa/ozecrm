@@ -308,14 +308,26 @@ class TestLeads:
             headers={"Authorization": f"Bearer {rep_token}"}
         )
         user_id = me_response.json()["id"]
-        
+
+        # Use unique coords per run to avoid anti-collision hits on repeated runs
+        import random as _rnd
+        import pymongo as _pm
+        unique_lat = round(54.05 + _rnd.uniform(-0.02, 0.02), 6)
+        unique_lng = round(21.75 + _rnd.uniform(-0.02, 0.02), 6)
+        # Clean out any previous TEST_Jan leads in the vicinity from prior runs
+        _mc = _pm.MongoClient("mongodb://localhost:27017")
+        _mc["oze_crm"]["leads"].delete_many(
+            {"client_name": {"$regex": "^TEST_Jan"}, "latitude": {"$gte": 54.0, "$lte": 54.1}}
+        )
+        _mc.close()
+
         lead_data = {
             "client_name": "TEST_Jan Testowy",
             "phone": "+48 500 123 456",
             "address": "Testowa 1, Gdańsk",
-            "postal_code": "80-001",
-            "latitude": 54.36100,
-            "longitude": 18.61100,
+            "postal_code": "11-500",
+            "latitude": unique_lat,
+            "longitude": unique_lng,
             "status": "nowy",
             "photo_base64": "iVBORw0KGgo" + "A" * 200  # min 100 chars, fake PNG prefix
         }
@@ -1298,3 +1310,179 @@ class TestBatchBFixForceChange:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert r.status_code == 200, f"{r.status_code} {r.text}"
+
+
+# ============ SPRINT 1 — ANTI-COLLISION V2 ============
+
+
+class TestAntiCollisionV2:
+    """Two-tier anti-collision (hard <15m, soft 15-75m) + apartment_number bypass + override stats."""
+
+    # Używamy nieobciążonego obszaru daleko od seed demo (seed=Trójmiasto 54.35-54.41, 18.57-18.66)
+    BASE_LAT = 54.0100
+    BASE_LNG = 20.0000
+
+    # ~1m per 0.00001 deg latitude at Polish latitudes (rough)
+    def _offset(self, base_lat: float, base_lng: float, meters_north: float, meters_east: float):
+        # 1 deg lat ~ 111_320 m; 1 deg lng ~ 111_320 * cos(lat)
+        import math
+        dlat = meters_north / 111_320.0
+        dlng = meters_east / (111_320.0 * math.cos(math.radians(base_lat)))
+        return round(base_lat + dlat, 7), round(base_lng + dlng, 7)
+
+    def _photo(self):
+        return "iVBORw0KGgo" + "A" * 200
+
+    def _cleanup_ctx(self, label_prefix: str):
+        """Remove any test leads under our base coords before AND after each test."""
+        import pymongo
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        try:
+            mc["oze_crm"]["leads"].delete_many(
+                {
+                    "latitude": {"$gte": self.BASE_LAT - 0.01, "$lte": self.BASE_LAT + 0.01},
+                    "longitude": {"$gte": self.BASE_LNG - 0.01, "$lte": self.BASE_LNG + 0.01},
+                }
+            )
+        finally:
+            mc.close()
+
+    def _create_lead(self, api_client, rep_token, lat, lng, apt=None, confirmed=False, name=None):
+        import uuid
+        payload = {
+            "client_name": name or f"ACv2_{uuid.uuid4().hex[:6]}",
+            "phone": "+48 500 000 000",
+            "address": "Anti-collision test",
+            "postal_code": "11-500",
+            "latitude": lat,
+            "longitude": lng,
+            "status": "nowy",
+            "photo_base64": self._photo(),
+        }
+        if apt is not None:
+            payload["apartment_number"] = apt
+        if confirmed:
+            payload["confirmed_nearby_duplicate"] = True
+        r = api_client.post(
+            f"{BASE_URL}/api/leads",
+            json=payload,
+            headers={"Authorization": f"Bearer {rep_token}"},
+        )
+        return r
+
+    # ── HARD STOP (< 15m) ────────────────────────────────────────────────────
+    def test_hard_stop_below_15m(self, api_client, rep_token):
+        self._cleanup_ctx("hard15")
+        r1 = self._create_lead(api_client, rep_token, self.BASE_LAT, self.BASE_LNG, name="ACv2_first_hard")
+        assert r1.status_code == 200, r1.text
+        # 10m north
+        lat2, lng2 = self._offset(self.BASE_LAT, self.BASE_LNG, 10, 0)
+        r2 = self._create_lead(api_client, rep_token, lat2, lng2, name="ACv2_hard_dup")
+        assert r2.status_code == 409, r2.text
+        detail = r2.json().get("detail")
+        assert isinstance(detail, dict), f"Expected dict detail, got {detail!r}"
+        assert detail.get("code") == "LEAD_DUPLICATE_HARD"
+        assert detail.get("existing_lead_id")
+        assert detail.get("distance_m") is not None
+        self._cleanup_ctx("hard15-end")
+
+    # ── apartment_number escape hatch ────────────────────────────────────────
+    def test_apartment_number_allows_same_building(self, api_client, rep_token):
+        self._cleanup_ctx("apt-diff")
+        r1 = self._create_lead(api_client, rep_token, self.BASE_LAT, self.BASE_LNG, apt="3", name="ACv2_apt3")
+        assert r1.status_code == 200
+        lat2, lng2 = self._offset(self.BASE_LAT, self.BASE_LNG, 5, 0)
+        r2 = self._create_lead(api_client, rep_token, lat2, lng2, apt="7", name="ACv2_apt7")
+        assert r2.status_code == 200, f"expected 200 (different flat), got {r2.status_code}: {r2.text}"
+        self._cleanup_ctx("apt-diff-end")
+
+    def test_apartment_number_same_blocks(self, api_client, rep_token):
+        self._cleanup_ctx("apt-same")
+        r1 = self._create_lead(api_client, rep_token, self.BASE_LAT, self.BASE_LNG, apt="3", name="ACv2_apt3_a")
+        assert r1.status_code == 200
+        lat2, lng2 = self._offset(self.BASE_LAT, self.BASE_LNG, 5, 0)
+        r2 = self._create_lead(api_client, rep_token, lat2, lng2, apt="3", name="ACv2_apt3_b")
+        assert r2.status_code == 409, r2.text
+        assert r2.json()["detail"]["code"] == "LEAD_DUPLICATE_HARD"
+        self._cleanup_ctx("apt-same-end")
+
+    # ── SOFT WARNING (15-75m) ────────────────────────────────────────────────
+    def test_soft_warning_15_to_75m(self, api_client, rep_token):
+        self._cleanup_ctx("soft30")
+        r1 = self._create_lead(api_client, rep_token, self.BASE_LAT, self.BASE_LNG, name="ACv2_soft_first")
+        assert r1.status_code == 200
+        lat2, lng2 = self._offset(self.BASE_LAT, self.BASE_LNG, 30, 0)  # 30m
+        r2 = self._create_lead(api_client, rep_token, lat2, lng2, name="ACv2_soft_dup")
+        assert r2.status_code == 409, r2.text
+        assert r2.json()["detail"]["code"] == "LEAD_NEARBY_SOFT"
+        self._cleanup_ctx("soft30-end")
+
+    def test_soft_warning_with_confirm_succeeds(self, api_client, rep_token):
+        self._cleanup_ctx("soft-confirm")
+        r1 = self._create_lead(api_client, rep_token, self.BASE_LAT, self.BASE_LNG, name="ACv2_cfirst")
+        assert r1.status_code == 200
+        existing_id = r1.json()["id"]
+        lat2, lng2 = self._offset(self.BASE_LAT, self.BASE_LNG, 30, 0)
+        r2 = self._create_lead(api_client, rep_token, lat2, lng2, confirmed=True, name="ACv2_cdup")
+        assert r2.status_code == 200, r2.text
+        saved = r2.json()
+        assert saved.get("nearby_override_confirmed") is True
+        assert saved.get("nearby_override_other_lead_id") == existing_id
+        assert saved.get("nearby_override_distance_m") is not None
+        # confirmed_nearby_duplicate must NOT be persisted
+        assert "confirmed_nearby_duplicate" not in saved or saved.get("confirmed_nearby_duplicate") in (None, False)
+        self._cleanup_ctx("soft-confirm-end")
+
+    # ── Far — no collision ───────────────────────────────────────────────────
+    def test_far_distance_no_collision(self, api_client, rep_token):
+        self._cleanup_ctx("far")
+        r1 = self._create_lead(api_client, rep_token, self.BASE_LAT, self.BASE_LNG, name="ACv2_far_first")
+        assert r1.status_code == 200
+        lat2, lng2 = self._offset(self.BASE_LAT, self.BASE_LNG, 100, 0)  # 100m away
+        r2 = self._create_lead(api_client, rep_token, lat2, lng2, name="ACv2_far_second")
+        assert r2.status_code == 200, r2.text
+        self._cleanup_ctx("far-end")
+
+    # ── override_stats in /users/{id}/profile ────────────────────────────────
+    def test_override_stats_in_profile(self, api_client, admin_token, rep_token):
+        self._cleanup_ctx("stats")
+        # Fetch rep user id
+        me = api_client.get(
+            f"{BASE_URL}/api/auth/me",
+            headers={"Authorization": f"Bearer {rep_token}"},
+        )
+        rep_id = me.json()["id"]
+
+        # Create 2 override leads
+        r1 = self._create_lead(api_client, rep_token, self.BASE_LAT, self.BASE_LNG, name="ACv2_stats_base1")
+        assert r1.status_code == 200
+        lat2, lng2 = self._offset(self.BASE_LAT, self.BASE_LNG, 30, 0)
+        r2 = self._create_lead(api_client, rep_token, lat2, lng2, confirmed=True, name="ACv2_stats_ovr1")
+        assert r2.status_code == 200
+
+        # Separate base (120m east to avoid hitting r1/r2)
+        base2_lat, base2_lng = self._offset(self.BASE_LAT, self.BASE_LNG, 0, 120)
+        r3 = self._create_lead(api_client, rep_token, base2_lat, base2_lng, name="ACv2_stats_base2")
+        assert r3.status_code == 200
+        lat4, lng4 = self._offset(base2_lat, base2_lng, 40, 0)
+        r4 = self._create_lead(api_client, rep_token, lat4, lng4, confirmed=True, name="ACv2_stats_ovr2")
+        assert r4.status_code == 200
+
+        # Profile call
+        prof = api_client.get(
+            f"{BASE_URL}/api/users/{rep_id}/profile",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert prof.status_code == 200, prof.text
+        stats = prof.json().get("override_stats")
+        assert stats is not None, "override_stats missing from profile response"
+        assert stats["total"] >= 2, f"expected >=2 overrides, got {stats}"
+        assert stats["this_month"] >= 2
+        assert len(stats["recent_overrides"]) >= 2
+        # Sanity check shape
+        entry = stats["recent_overrides"][0]
+        assert "lead_id" in entry and "lead_client_name" in entry
+        assert "other_lead_client_name" in entry and "distance_m" in entry
+
+        self._cleanup_ctx("stats-end")
+
