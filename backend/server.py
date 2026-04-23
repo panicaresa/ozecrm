@@ -427,9 +427,10 @@ async def create_lead(body: LeadIn, user: Dict[str, Any] = Depends(get_current_u
     elif user["role"] == "handlowiec" and user.get("manager_id"):
         owner_manager = user["manager_id"]
     doc = body.dict()
-    # Parse meeting_at properly if provided
+    # Parse meeting_at properly if provided — store as ISO string for consistency with legacy/PATCHed leads
     if body.meeting_at:
-        doc["meeting_at"] = _parse_iso_dt(body.meeting_at)
+        parsed = _parse_iso_dt(body.meeting_at)
+        doc["meeting_at"] = parsed.isoformat() if parsed else None
     doc.update(
         {
             "id": lead_id,
@@ -474,7 +475,8 @@ async def update_lead(lead_id: str, body: LeadUpdate, user: Dict[str, Any] = Dep
                 raise HTTPException(status_code=400, detail="Termin spotkania nie może być wcześniejszy niż wczoraj.")
             if parsed > cur + timedelta(days=365 * 2):
                 raise HTTPException(status_code=400, detail="Termin spotkania nie może być później niż 2 lata w przód.")
-            updates["meeting_at"] = parsed
+            # Store as ISO string for consistency
+            updates["meeting_at"] = parsed.isoformat() if hasattr(parsed, "isoformat") else parsed
     updates["updated_at"] = now()
     await db.leads.update_one({"id": lead_id}, {"$set": updates})
     out = await db.leads.find_one({"id": lead_id}, {"_id": 0})
@@ -1596,19 +1598,23 @@ async def list_meetings(user: Dict[str, Any] = Depends(get_current_user)):
     out = []
     for l in leads:
         rep = users_map.get(l.get("assigned_to"))
+        # Normalize meeting_at to ISO string (legacy rows may have datetime)
+        m_at = l.get("meeting_at")
+        if isinstance(m_at, datetime):
+            m_at = iso(m_at)
         out.append({
             "lead_id": l.get("id"),
             "client_name": l.get("client_name"),
             "phone": l.get("phone"),
             "address": l.get("address"),
-            "meeting_at": l.get("meeting_at"),
+            "meeting_at": m_at,
             "latitude": l.get("latitude"),
             "longitude": l.get("longitude"),
             "rep_id": l.get("assigned_to"),
             "rep_name": (rep.get("name") or rep.get("email")) if rep else "—",
             "note": l.get("note"),
         })
-    out.sort(key=lambda x: (x["meeting_at"] or ""))
+    out.sort(key=lambda x: (x.get("meeting_at") or ""))
     return out
 
 
