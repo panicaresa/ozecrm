@@ -5,7 +5,9 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 import os
+import sys
 import uuid
+import secrets as _secrets
 import logging
 import bcrypt
 import jwt
@@ -27,9 +29,40 @@ mongo_url = os.environ["MONGO_URL"]
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ["DB_NAME"]]
 
+# ── Deployment env configuration (Batch A — security hardening) ──────────────
+# APP_ENV controls fail-fast behaviour for weak secrets and other prod checks.
+APP_ENV = os.environ.get("APP_ENV", "development").lower()
+# SEED_DEMO=1 populates demo users + leads on startup. Never set to 1 on prod.
+SEED_DEMO = os.environ.get("SEED_DEMO", "0") == "1"
+# First-admin bootstrap email (used only when users collection is empty).
+ADMIN_BOOTSTRAP_EMAIL = os.environ.get("ADMIN_BOOTSTRAP_EMAIL", "admin@grupaoze.pl").lower()
+
 JWT_ALGORITHM = "HS256"
-JWT_SECRET = os.environ["JWT_SECRET"]
+JWT_SECRET = os.environ.get("JWT_SECRET", "")
 ACCESS_TTL_HOURS = 24 * 7
+
+# ── JWT_SECRET strength validation ───────────────────────────────────────────
+# PRODUCTION: zawsze ustawić JWT_SECRET w env vars Emergent (64+ chars urlsafe).
+_WEAK_JWT_VALUES = {"change-me", "changeme", "secret", "dev", "test", "default"}
+
+
+def _validate_jwt_secret() -> None:
+    problem: Optional[str] = None
+    if not JWT_SECRET:
+        problem = "JWT_SECRET is missing"
+    elif JWT_SECRET.strip().lower() in _WEAK_JWT_VALUES:
+        problem = "JWT_SECRET is set to a well-known weak value"
+    elif len(JWT_SECRET) < 32:
+        problem = f"JWT_SECRET is too short ({len(JWT_SECRET)} chars, require >=32)"
+    if problem:
+        if APP_ENV == "production":
+            logger.error(f"FATAL: {problem}. Refusing to start in production (APP_ENV=production).")
+            raise SystemExit(1)
+        else:
+            logger.warning(f"[dev] JWT_SECRET weak/missing: {problem}. Acceptable in APP_ENV={APP_ENV} only.")
+
+
+_validate_jwt_secret()
 
 app = FastAPI(title="OZE CRM API")
 api = APIRouter(prefix="/api")
@@ -80,6 +113,7 @@ def serialize_user(u: Dict[str, Any]) -> Dict[str, Any]:
         "role": u["role"],
         "avatar_url": u.get("avatar_url"),
         "manager_id": u.get("manager_id"),
+        "must_change_password": bool(u.get("must_change_password", False)),
         "created_at": iso(u.get("created_at")),
     }
 
@@ -104,9 +138,21 @@ def require_roles(*roles: str):
     async def checker(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
         if user["role"] not in roles:
             raise HTTPException(status_code=403, detail="Forbidden: insufficient role")
+        if user.get("must_change_password"):
+            raise HTTPException(status_code=403, detail="Password change required")
         return user
 
     return checker
+
+
+async def require_password_changed(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    """Blocks sensitive writes when user still has a temporary password (must_change_password=True).
+
+    Only GET endpoints and POST /auth/change-password remain accessible in that state.
+    """
+    if user.get("must_change_password"):
+        raise HTTPException(status_code=403, detail="Password change required")
+    return user
 
 
 ROLES = ("admin", "manager", "handlowiec")
@@ -133,6 +179,11 @@ class UserUpdate(BaseModel):
     role: Optional[str] = None
     manager_id: Optional[str] = None
     password: Optional[str] = None
+
+
+class ChangePasswordIn(BaseModel):
+    current_password: str
+    new_password: str
 
 
 class LeadIn(BaseModel):
@@ -250,6 +301,31 @@ async def login(body: LoginIn):
 @api.get("/auth/me")
 async def me(user: Dict[str, Any] = Depends(get_current_user)):
     return serialize_user(user)
+
+
+@api.post("/auth/change-password")
+async def change_password(body: ChangePasswordIn, user: Dict[str, Any] = Depends(get_current_user)):
+    """Force-password-change flow. Accepts current_password + new_password.
+
+    Rules:
+      - new_password length >= 12
+      - new_password contains at least 1 letter AND 1 digit
+      - current_password must match stored hash (bcrypt)
+    On success: updates password_hash AND clears must_change_password flag.
+    """
+    new_pw = body.new_password or ""
+    if len(new_pw) < 12:
+        raise HTTPException(status_code=400, detail="Nowe hasło musi mieć co najmniej 12 znaków")
+    if not any(c.isalpha() for c in new_pw) or not any(c.isdigit() for c in new_pw):
+        raise HTTPException(status_code=400, detail="Nowe hasło musi zawierać min. 1 literę i 1 cyfrę")
+    if not verify_password(body.current_password or "", user.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Bieżące hasło jest niepoprawne")
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$set": {"password_hash": hash_password(new_pw), "must_change_password": False}},
+    )
+    logger.info(f"Password changed for user {user.get('email')}")
+    return {"ok": True}
 
 
 @api.post("/auth/register")
@@ -1321,6 +1397,7 @@ async def create_contract(
     body: ContractIn,
     request: Request,
     user: Dict[str, Any] = Depends(get_current_user),
+    _pw_check: Dict[str, Any] = Depends(require_password_changed),
 ):
     # ── Validation layer (Faza 1.9) ─────────────────────────────────────────────
     if body.financing_type not in FINANCING_TYPES:
@@ -1705,6 +1782,80 @@ async def finance_dashboard_v2(user: Dict[str, Any] = Depends(get_current_user))
 
 
 
+async def ensure_indexes_and_migrations():
+    """Idempotent indexes + schema migrations. Always runs at startup (dev & prod)."""
+    await db.users.create_index("email", unique=True)
+    await db.leads.create_index("assigned_to")
+    await db.leads.create_index("owner_manager_id")
+    await db.settings.create_index("id", unique=True)
+    await db.goals.create_index([("user_id", 1), ("period", 1)], unique=True)
+    await db.rep_locations.create_index("user_id", unique=True)
+    await db.contracts.create_index("rep_id")
+    await db.contracts.create_index("owner_manager_id")
+    await db.contracts.create_index("signed_at")
+    await db.contracts.create_index("idempotency_key", sparse=True)
+    await db.contract_audit_log.create_index("contract_id")
+    await db.contract_audit_log.create_index("changed_at")
+
+    # Migration: ensure must_change_password flag exists on every user (default False)
+    try:
+        await db.users.update_many(
+            {"must_change_password": {"$exists": False}},
+            {"$set": {"must_change_password": False}},
+        )
+    except Exception as e:
+        logger.warning(f"must_change_password migration skipped: {e}")
+
+    existing_settings = await db.settings.find_one({"id": "global"})
+    if not existing_settings:
+        await db.settings.insert_one(
+            {
+                "id": "global",
+                **SettingsIn(rrso_rates=DEFAULT_RRSO, excluded_zip_codes=["77-400"]).dict(),
+                "updated_at": now(),
+            }
+        )
+    else:
+        # Backfill any new SettingsIn fields on existing doc
+        defaults = SettingsIn(rrso_rates=DEFAULT_RRSO, excluded_zip_codes=["77-400"]).dict()
+        missing = {k: v for k, v in defaults.items() if k not in existing_settings}
+        if missing:
+            await db.settings.update_one({"id": "global"}, {"$set": missing})
+            logger.info(f"Settings migration: backfilled keys {list(missing.keys())}")
+
+
+async def seed_prod_admin_if_empty():
+    """If users collection is empty, create ONE bootstrap admin with a random
+    temporary password and must_change_password=True. Prints the password once
+    to stdout so the deployer can read it from container logs. Never re-creates
+    if at least one user already exists."""
+    count = await db.users.count_documents({})
+    if count > 0:
+        return
+    temp_password = _secrets.token_urlsafe(16)  # ~22 chars url-safe
+    admin_doc = {
+        "id": str(uuid.uuid4()),
+        "email": ADMIN_BOOTSTRAP_EMAIL,
+        "password_hash": hash_password(temp_password),
+        "name": "Administrator",
+        "role": "admin",
+        "manager_id": None,
+        "avatar_url": None,
+        "must_change_password": True,
+        "created_at": now(),
+    }
+    await db.users.insert_one(admin_doc)
+    line = "=" * 60
+    # stdout only — NOT written to any file
+    print(line, flush=True)
+    print("BOOTSTRAP ADMIN CREATED — SAVE THIS PASSWORD:", flush=True)
+    print(f"  Email: {ADMIN_BOOTSTRAP_EMAIL}", flush=True)
+    print(f"  Password: {temp_password}", flush=True)
+    print("  ⚠️ You MUST change this password on first login.", flush=True)
+    print("  ⚠️ This message will NOT be shown again.", flush=True)
+    print(line, flush=True)
+
+
 async def seed_data():
     await db.users.create_index("email", unique=True)
     await db.leads.create_index("assigned_to")
@@ -1869,10 +2020,25 @@ async def root():
     return {"message": "OZE CRM API", "status": "ok"}
 
 
+# ── CORS whitelist (Batch A — security hardening) ────────────────────────────
+# PRODUCTION: zawsze ustawić CORS_ALLOWED_ORIGINS w env vars Emergent (CSV).
+CORS_ALLOWED_ORIGINS_RAW = os.environ.get("CORS_ALLOWED_ORIGINS", "").strip()
+if CORS_ALLOWED_ORIGINS_RAW:
+    _cors_origins = [o.strip() for o in CORS_ALLOWED_ORIGINS_RAW.split(",") if o.strip()]
+    _cors_allow_credentials = True
+    logger.info(f"CORS whitelist enabled ({len(_cors_origins)} origin(s)): {_cors_origins}")
+else:
+    _cors_origins = ["*"]
+    _cors_allow_credentials = False  # browsers reject credentials + wildcard combo
+    logger.warning(
+        "CORS wildcard enabled (no CORS_ALLOWED_ORIGINS env var). "
+        "PRODUCTION: set CORS_ALLOWED_ORIGINS in env vars."
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -1881,10 +2047,18 @@ app.add_middleware(
 @app.on_event("startup")
 async def on_startup():
     try:
-        await seed_data()
-        logger.info("Seed completed")
+        await ensure_indexes_and_migrations()
+        await seed_prod_admin_if_empty()
+        if SEED_DEMO:
+            logger.info("Demo seed: ENABLED (SEED_DEMO=1)")
+            await seed_data()
+        else:
+            logger.info("Demo seed: DISABLED (SEED_DEMO != 1) — only indexes + migrations ran")
+        logger.info("Startup completed")
+    except SystemExit:
+        raise
     except Exception as e:
-        logger.exception(f"Seed failed: {e}")
+        logger.exception(f"Startup failed: {e}")
 
 
 @app.on_event("shutdown")

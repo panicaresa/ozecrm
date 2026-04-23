@@ -1001,3 +1001,215 @@ class TestRepLocation:
             headers={"Authorization": f"Bearer {rep_token}"}
         )
         assert response.status_code == 403, f"Expected 403, got {response.status_code}"
+
+
+
+# ============ BATCH A — SECURITY HARDENING TESTS ============
+# Testy dla CORS whitelist, JWT validation, SEED_DEMO gating,
+# bootstrap admin + force-password-change flow.
+
+import subprocess
+import uuid as _uuid
+
+
+class TestBatchASecurity:
+    """Backend security hardening (CORS, JWT, seed gating, bootstrap admin, change-password)."""
+
+    # ── CORS ──────────────────────────────────────────────────────────────────
+    def test_cors_whitelist_blocks_unknown_origin(self, api_client):
+        """When backend runs with CORS_ALLOWED_ORIGINS set, a preflight from
+        an un-whitelisted origin must NOT echo the Origin header back.
+        In dev (wildcard fallback) this test is skipped automatically."""
+        # Probe current CORS policy: OPTIONS preflight from evil origin
+        r = api_client.options(
+            f"{BASE_URL}/api/",
+            headers={
+                "Origin": "https://evil.example.com",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization",
+            },
+        )
+        allowed_origin = r.headers.get("access-control-allow-origin", "")
+        # Dev backend has wildcard → allow_origin == "*" — skip
+        if allowed_origin == "*":
+            pytest.skip("CORS currently in wildcard dev mode (no CORS_ALLOWED_ORIGINS)")
+        # If whitelist is active, evil origin should NOT be echoed back.
+        assert allowed_origin != "https://evil.example.com", (
+            f"CORS whitelist failed: evil origin was allowed ({allowed_origin!r})"
+        )
+
+    # ── JWT_SECRET validation ─────────────────────────────────────────────────
+    def test_weak_jwt_secret_fails_in_prod(self):
+        """Spawning server.py import with APP_ENV=production + weak JWT_SECRET
+        must trigger SystemExit(1) before FastAPI app is ready."""
+        code = (
+            "import os, sys;"
+            "os.environ['MONGO_URL']='mongodb://localhost:27017';"
+            "os.environ['DB_NAME']='oze_crm';"
+            "os.environ['APP_ENV']='production';"
+            "os.environ['JWT_SECRET']='short';"
+            "os.environ['ADMIN_EMAIL']='admin@test.com';"
+            "os.environ['ADMIN_PASSWORD']='test1234';"
+            "os.environ['MANAGER_EMAIL']='manager@test.com';"
+            "os.environ['MANAGER_PASSWORD']='test1234';"
+            "os.environ['REP_EMAIL']='rep@test.com';"
+            "os.environ['REP_PASSWORD']='test1234';"
+            "sys.path.insert(0, '/app/backend');"
+            "import server"
+        )
+        proc = subprocess.run(
+            ["python", "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            cwd="/tmp",  # avoid auto-loading /app/backend/.env
+        )
+        # Either SystemExit(1) or non-zero exit is acceptable
+        assert proc.returncode != 0, (
+            f"Backend imported successfully with weak JWT_SECRET in production mode! "
+            f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        )
+
+    # ── SEED_DEMO gating ──────────────────────────────────────────────────────
+    def test_seed_demo_enabled_test_users_present(self, api_client):
+        """With SEED_DEMO=1 (current dev env), demo test users must exist."""
+        r = api_client.post(f"{BASE_URL}/api/auth/login", json=ADMIN_CREDS)
+        assert r.status_code == 200, "admin@test.com should exist when SEED_DEMO=1"
+
+    # ── Change password flow ──────────────────────────────────────────────────
+    def _fresh_user(self, api_client, admin_token):
+        """Create a throwaway handlowiec via admin register, return (email, pw, token)."""
+        email = f"batcha+{_uuid.uuid4().hex[:8]}@test.com"
+        pw = "initialPass123"  # 15 chars, has letters + digits
+        r = api_client.post(
+            f"{BASE_URL}/api/auth/register",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json={"email": email, "password": pw, "name": "Batch A User", "role": "handlowiec"},
+        )
+        assert r.status_code == 200, f"register failed: {r.status_code} {r.text}"
+        user_id = r.json()["id"]
+        # Login
+        lr = api_client.post(f"{BASE_URL}/api/auth/login", json={"email": email, "password": pw})
+        assert lr.status_code == 200
+        token = lr.json()["access_token"]
+        return email, pw, token, user_id
+
+    def test_change_password_success(self, api_client, admin_token):
+        email, pw, token, _ = self._fresh_user(api_client, admin_token)
+        new_pw = "NewSecurePass2026"  # 17 chars
+        r = api_client.post(
+            f"{BASE_URL}/api/auth/change-password",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"current_password": pw, "new_password": new_pw},
+        )
+        assert r.status_code == 200, f"{r.status_code} {r.text}"
+        assert r.json().get("ok") is True
+        # Old password must fail now
+        lr_old = api_client.post(f"{BASE_URL}/api/auth/login", json={"email": email, "password": pw})
+        assert lr_old.status_code == 401
+        # New password must work
+        lr_new = api_client.post(f"{BASE_URL}/api/auth/login", json={"email": email, "password": new_pw})
+        assert lr_new.status_code == 200
+
+    def test_change_password_rejects_weak(self, api_client, admin_token):
+        _, pw, token, _ = self._fresh_user(api_client, admin_token)
+        # too short
+        r = api_client.post(
+            f"{BASE_URL}/api/auth/change-password",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"current_password": pw, "new_password": "short1a"},
+        )
+        assert r.status_code == 400
+        # no digit
+        r2 = api_client.post(
+            f"{BASE_URL}/api/auth/change-password",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"current_password": pw, "new_password": "onlyletterslong"},
+        )
+        assert r2.status_code == 400
+        # wrong current password
+        r3 = api_client.post(
+            f"{BASE_URL}/api/auth/change-password",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"current_password": "wrong-current", "new_password": "GoodPassword123"},
+        )
+        assert r3.status_code == 401
+
+    def test_must_change_password_flag_in_me(self, api_client, admin_token):
+        """/auth/me must expose must_change_password flag (default False for demo users)."""
+        r = api_client.get(
+            f"{BASE_URL}/api/auth/me",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert "must_change_password" in body, "must_change_password flag missing in /auth/me"
+        assert body["must_change_password"] is False  # admin@test.com has no temp pw
+
+    def test_must_change_password_blocks_sensitive_endpoints(self, api_client, admin_token):
+        """Force a user into must_change_password=True via MongoDB directly, verify
+        that sensitive write endpoints return 403 until password is changed."""
+        try:
+            from motor.motor_asyncio import AsyncIOMotorClient  # noqa: F401
+            import asyncio
+            import pymongo
+        except ImportError:
+            pytest.skip("pymongo not installed")
+
+        email, pw, token, user_id = self._fresh_user(api_client, admin_token)
+        # Set the flag directly in DB
+        mclient = pymongo.MongoClient("mongodb://localhost:27017")
+        mclient["oze_crm"]["users"].update_one(
+            {"id": user_id}, {"$set": {"must_change_password": True}}
+        )
+        mclient.close()
+
+        # /auth/me must now reflect the flag
+        me = api_client.get(f"{BASE_URL}/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert me.status_code == 200
+        assert me.json().get("must_change_password") is True
+
+        # Sensitive endpoint: POST /api/contracts must return 403 "Password change required"
+        contract_body = {
+            "lead_id": "nonexistent-id",
+            "signed_at": "2025-01-01",
+            "buildings_count": 1,
+            "building_type": "mieszkalny",
+            "roof_area_m2": 100.0,
+            "gross_amount": 50000.0,
+            "global_margin": 5000.0,
+            "financing_type": "cash",
+        }
+        r_contract = api_client.post(
+            f"{BASE_URL}/api/contracts",
+            headers={"Authorization": f"Bearer {token}"},
+            json=contract_body,
+        )
+        assert r_contract.status_code == 403, (
+            f"Expected 403 (password change required), got {r_contract.status_code}: {r_contract.text}"
+        )
+        assert "Password change required" in r_contract.text
+
+        # GET endpoints must still work
+        r_leads = api_client.get(
+            f"{BASE_URL}/api/leads",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r_leads.status_code == 200, "GET endpoints should remain accessible"
+
+        # change-password must still be reachable
+        r_chg = api_client.post(
+            f"{BASE_URL}/api/auth/change-password",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"current_password": pw, "new_password": "NewPassword2026"},
+        )
+        assert r_chg.status_code == 200
+
+        # After change, flag must be cleared
+        me2 = api_client.get(f"{BASE_URL}/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert me2.json().get("must_change_password") is False
+
+        # Cleanup: remove throwaway user
+        cleanup = pymongo.MongoClient("mongodb://localhost:27017")
+        cleanup["oze_crm"]["users"].delete_one({"id": user_id})
+        cleanup.close()

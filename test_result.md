@@ -1294,4 +1294,117 @@ agent_communication:
       Minor observation: live DB has margin_per_m2=100.0 (not the default 50.0)
       from a prior admin PUT. Math assertions used live settings so this is not
       a failure — just a heads-up in case the review expected defaults.
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# BATCH A — BACKEND SECURITY HARDENING (2026-04-23)
+# ──────────────────────────────────────────────────────────────────────────────
+backend:
+  - task: "Batch A #3 — CORS whitelist via CSV env var"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Replaced allow_origins=["*"] with CSV parse of CORS_ALLOWED_ORIGINS env var.
+          Empty var → wildcard fallback + WARNING log (dev only).
+          Non-empty var → strict whitelist + allow_credentials=True.
+
+  - task: "Batch A #4 — JWT_SECRET strength validation + APP_ENV gating"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Added APP_ENV env var (default "development"). _validate_jwt_secret()
+          checks length >= 32 and blocks well-known weak values
+          (change-me/secret/dev/test/default). When APP_ENV=production and
+          JWT_SECRET is weak → raise SystemExit(1) refusing to boot. In dev
+          a WARNING is logged instead. Verified via subprocess test.
+
+  - task: "Batch A #5 — SEED_DEMO gating on startup"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Extracted ensure_indexes_and_migrations() (always runs).
+          seed_data() (6 demo users + 10 leads) now gated by SEED_DEMO=="1".
+          Dev .env has SEED_DEMO=1 → demo users intact. Prod will omit it,
+          skipping demo seed entirely.
+
+  - task: "Batch A #6 — Bootstrap admin + must_change_password flow"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          seed_prod_admin_if_empty() runs always but only acts when users
+          collection is empty. Creates a single admin with random 20+ char
+          password (secrets.token_urlsafe(16)), must_change_password=True.
+          Password is printed ONCE to stdout (not persisted anywhere).
+
+          New field must_change_password on user docs (migration backfills
+          existing users with False). serialize_user exposes it in /auth/me
+          and /auth/login responses.
+
+          POST /api/auth/change-password endpoint: validates new_password
+          length>=12 + has letter + has digit, verifies current_password,
+          updates hash AND clears flag.
+
+          require_password_changed dependency blocks write endpoints when
+          flag is True: applied implicitly via require_roles() AND explicitly
+          on POST /contracts (which uses plain get_current_user). Integration
+          test confirms 403 "Password change required" while GET endpoints
+          and /auth/change-password remain accessible.
+
+  - task: "Batch A — test coverage"
+    implemented: true
+    working: true
+    file: "/app/backend/tests/test_oze_crm_api.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Added TestBatchASecurity class with 7 tests:
+            - test_cors_whitelist_blocks_unknown_origin (skipped in dev wildcard mode)
+            - test_weak_jwt_secret_fails_in_prod (subprocess import of server.py)
+            - test_seed_demo_enabled_test_users_present
+            - test_change_password_success (full flow w/ throwaway user)
+            - test_change_password_rejects_weak (too short, no digit, wrong current pw)
+            - test_must_change_password_flag_in_me
+            - test_must_change_password_blocks_sensitive_endpoints
+
+          Suite result: 40 passed, 1 skipped (CORS by design in dev), 1 pre-existing
+          failure (TestLeads::test_create_lead_as_handlowiec — needs photo_base64,
+          unrelated to Batch A). No regressions introduced.
+
+metadata:
+  batch_a_complete: true
+  batch_a_date: "2026-04-23"
+  dev_compatibility: "admin@test.com / test1234 login still works — verified"
+
       No blockers. Endpoint is production-ready.
