@@ -6,6 +6,7 @@ import { useRouter } from "expo-router";
 import { colors, radius, spacing } from "../../src/theme";
 import { useAuth } from "../../src/lib/auth";
 import { BrandLogo } from "../../src/components/BrandLogo";
+import { QueueBadge } from "../../src/components/QueueBadge";
 import { CommissionCalculator } from "../../src/components/CommissionCalculator";
 
 export default function AdminHome() {
@@ -29,9 +30,12 @@ export default function AdminHome() {
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <View style={styles.topbar}>
         <BrandLogo height={28} testID="admin-brand-logo" />
-        <TouchableOpacity style={styles.iconBtn} onPress={handleLogout} testID="logout-button">
-          <Feather name="log-out" size={18} color={colors.textInverse} />
-        </TouchableOpacity>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+          <QueueBadge />
+          <TouchableOpacity style={styles.iconBtn} onPress={handleLogout} testID="logout-button">
+            <Feather name="log-out" size={18} color={colors.textInverse} />
+          </TouchableOpacity>
+        </View>
       </View>
       <View style={styles.header}>
         <View style={{ flex: 1 }}>

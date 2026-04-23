@@ -20,6 +20,7 @@ import { ProgressRow } from "../../src/components/ProgressRow";
 import { StatusDonut } from "../../src/components/StatusDonut";
 import { LeadMap } from "../../src/components/LeadMap";
 import { BrandLogo } from "../../src/components/BrandLogo";
+import { QueueBadge } from "../../src/components/QueueBadge";
 import { CommissionCalculator } from "../../src/components/CommissionCalculator";
 import { useRepLocationsWS } from "../../src/lib/useRepLocationsWS";
 import { Lead } from "../../src/components/LeadCard";
@@ -208,9 +209,12 @@ export default function ManagerDashboard() {
         {/* Top bar with logo */}
         <View style={styles.topbar}>
           <BrandLogo height={28} testID="manager-brand-logo" />
-          <TouchableOpacity style={styles.iconBtn} onPress={handleLogout} testID="logout-button">
-            <Feather name="log-out" size={18} color={colors.textInverse} />
-          </TouchableOpacity>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+            <QueueBadge />
+            <TouchableOpacity style={styles.iconBtn} onPress={handleLogout} testID="logout-button">
+              <Feather name="log-out" size={18} color={colors.textInverse} />
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Greeting */}
