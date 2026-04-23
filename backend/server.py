@@ -1662,6 +1662,30 @@ async def create_contract(
                 return _serialize_contract(existing)
         raise HTTPException(status_code=500, detail=f"Insert failed: {e}")
     await db.leads.update_one({"id": body.lead_id}, {"$set": {"status": "podpisana", "updated_at": now()}})
+
+    # Sprint 3a — broadcast contract_signed event for confetti (best-effort,
+    # never block successful POST /contracts on broadcaster errors).
+    try:
+        rep_user = await db.users.find_one({"id": doc["rep_id"]}, {"_id": 0, "name": 1, "id": 1})
+        rep_name = rep_user.get("name") if rep_user else "Handlowiec"
+        lead_doc = await db.leads.find_one({"id": body.lead_id}, {"_id": 0, "client_name": 1})
+        client_name = (lead_doc or {}).get("client_name") or doc.get("client_name")
+        await event_broadcaster.broadcast(
+            "contract_signed",
+            {
+                "contract_id": doc["id"],
+                "lead_id": doc["lead_id"],
+                "client_name": client_name,
+                "rep_id": doc["rep_id"],
+                "rep_name": rep_name,
+                "gross_amount": doc.get("gross_amount"),
+                "commission_amount": doc.get("commission_amount"),
+                "signed_at": iso(doc.get("signed_at")),
+            },
+        )
+    except Exception as e:
+        logger.warning(f"event_broadcaster broadcast(contract_signed) failed: {e}")
+
     return _serialize_contract(doc)
 
 
@@ -2304,6 +2328,47 @@ class LocationBroadcaster:
 broadcaster = LocationBroadcaster()
 
 
+# Sprint 3a — global event pub/sub for contract_signed etc. (broadcast to all
+# authenticated clients). Separate from LocationBroadcaster which is scoped.
+class EventBroadcaster:
+    """Broadcast application-wide events (contract_signed, override_alert, …)
+    to every connected client. Designed as pure pub/sub — no event-specific
+    logic inside; add new event types simply by calling broadcast()."""
+
+    def __init__(self) -> None:
+        self._subs: Dict[str, Dict[str, Any]] = {}  # ws_id → {ws, user}
+        self._lock = asyncio.Lock()
+
+    async def subscribe(self, ws_id: str, ws: WebSocket, user: Dict[str, Any]) -> None:
+        async with self._lock:
+            self._subs[ws_id] = {"ws": ws, "user": user}
+        logger.info(f"WS[events] subscribed: {ws_id} role={user['role']} ({len(self._subs)} total)")
+
+    async def unsubscribe(self, ws_id: str) -> None:
+        async with self._lock:
+            self._subs.pop(ws_id, None)
+        logger.info(f"WS[events] unsubscribed: {ws_id} ({len(self._subs)} remain)")
+
+    async def broadcast(self, event_type: str, payload: Dict[str, Any]) -> None:
+        """Fan-out a single event to every subscriber. Dead sockets are pruned."""
+        if not self._subs:
+            logger.info(f"event_broadcaster: no subscribers — dropped {event_type}")
+            return
+        msg = json.dumps({"type": event_type, **payload})
+        dead_ids: List[str] = []
+        for ws_id, sub in list(self._subs.items()):
+            try:
+                await sub["ws"].send_text(msg)
+            except Exception:
+                dead_ids.append(ws_id)
+        for dead in dead_ids:
+            await self.unsubscribe(dead)
+        logger.info(f"event_broadcaster: broadcasted {event_type} to {len(self._subs) - len(dead_ids)} subs")
+
+
+event_broadcaster = EventBroadcaster()
+
+
 async def _authenticate_ws(token: str) -> Optional[Dict[str, Any]]:
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
@@ -2378,6 +2443,46 @@ async def ws_rep_locations(ws: WebSocket):
                 break
     finally:
         await broadcaster.unsubscribe(ws_id)
+
+
+@app.websocket("/ws/events")
+async def ws_events(ws: WebSocket):
+    """Sprint 3a — WS endpoint for application-wide events (contract_signed etc.).
+    Auth identical to /ws/rep-locations: first frame within 5s must carry {"token": jwt}.
+    After auth, client receives every broadcast() call from event_broadcaster.
+    """
+    await ws.accept()
+    ws_id = str(uuid.uuid4())
+    user: Optional[Dict[str, Any]] = None
+    try:
+        try:
+            auth_raw = await asyncio.wait_for(ws.receive_text(), timeout=5.0)
+            auth_msg = json.loads(auth_raw)
+            token = auth_msg.get("token")
+        except Exception:
+            await ws.close(code=4001)
+            return
+        user = await _authenticate_ws(token or "")
+        if not user:
+            await ws.send_text(json.dumps({"type": "auth_error", "detail": "Invalid token"}))
+            await ws.close(code=4001)
+            return
+        await ws.send_text(json.dumps({"type": "auth_ok", "user_id": user["id"], "role": user["role"]}))
+        await event_broadcaster.subscribe(ws_id, ws, user)
+
+        while True:
+            try:
+                data = await ws.receive_text()
+                try:
+                    msg = json.loads(data)
+                    if msg.get("type") == "ping":
+                        await ws.send_text(json.dumps({"type": "pong"}))
+                except Exception:
+                    pass
+            except WebSocketDisconnect:
+                break
+    finally:
+        await event_broadcaster.unsubscribe(ws_id)
 
 
 @api.get("/tracking/track/{rep_id}")

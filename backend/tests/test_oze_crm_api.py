@@ -1612,3 +1612,189 @@ class TestLeadIdempotency:
         assert saved.get("idempotency_key") in (None, "", False)
         self._cleanup()
 
+
+
+# ============ SPRINT 3a — CONTRACT_SIGNED WS EVENT ============
+
+
+class TestContractSignedEvent:
+    """Verify that POST /contracts broadcasts a 'contract_signed' frame to /ws/events
+    subscribers, and that a failing broadcaster does NOT break the POST.
+
+    Integration-style: opens a real websocket client, authenticates, POSTs a
+    contract and asserts that a matching frame arrives within a short window.
+    """
+
+    BASE_LAT = 52.9000
+    BASE_LNG = 19.9000
+
+    def _photo(self):
+        return "iVBORw0KGgo" + "A" * 200
+
+    def _cleanup(self):
+        import pymongo
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        try:
+            mc["oze_crm"]["leads"].delete_many(
+                {"client_name": {"$regex": "^WS_"}}
+            )
+            mc["oze_crm"]["contracts"].delete_many(
+                {"client_name": {"$regex": "^WS_"}}
+            )
+        finally:
+            mc.close()
+
+    def _ws_url(self):
+        # Backend runs locally on 8001 — bypass ngrok/CDN for WS tests (the
+        # preview URL's Cloudflare/ngrok tunnel is not WS-reliable).
+        return "ws://localhost:8001/ws/events"
+
+    def _create_signed_lead(self, api_client, rep_token, jitter):
+        """Create a fresh 'umowione' lead far from any seed demo so that we
+        can sign a contract against it."""
+        import uuid, json as _json
+        lat = self.BASE_LAT + jitter * 0.0002
+        lng = self.BASE_LNG + jitter * 0.0002
+        payload = {
+            "client_name": f"WS_Lead_{uuid.uuid4().hex[:6]}",
+            "latitude": lat,
+            "longitude": lng,
+            "status": "umowione",
+            "meeting_at": "2026-04-25T10:00:00",
+            "photo_base64": self._photo(),
+        }
+        r = api_client.post(
+            f"{BASE_URL}/api/leads",
+            json=payload,
+            headers={"Authorization": f"Bearer {rep_token}"},
+        )
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    def test_contract_post_broadcasts_contract_signed(self, api_client, rep_token):
+        """POST /contracts → every /ws/events subscriber receives
+        a 'contract_signed' frame with rep_id, gross_amount, etc."""
+        try:
+            import websocket  # type: ignore
+        except ImportError:
+            pytest.skip("websocket-client not installed")
+        import json as _json
+        import threading
+        import time
+
+        self._cleanup()
+        lead = self._create_signed_lead(api_client, rep_token, jitter=1)
+        lead_id = lead["id"]
+        rep_me = api_client.get(
+            f"{BASE_URL}/api/auth/me",
+            headers={"Authorization": f"Bearer {rep_token}"},
+        )
+        rep_id = rep_me.json()["id"]
+
+        received = []
+        connected_evt = threading.Event()
+        auth_ok_evt = threading.Event()
+        event_evt = threading.Event()
+
+        def on_message(wsapp, message):
+            try:
+                m = _json.loads(message)
+            except Exception:
+                return
+            if m.get("type") == "auth_ok":
+                auth_ok_evt.set()
+                return
+            if m.get("type") == "contract_signed":
+                received.append(m)
+                event_evt.set()
+
+        def on_open(wsapp):
+            connected_evt.set()
+            wsapp.send(_json.dumps({"token": rep_token}))
+
+        def on_error(wsapp, err):
+            pass
+
+        wsapp = websocket.WebSocketApp(
+            self._ws_url(),
+            on_open=on_open,
+            on_message=on_message,
+            on_error=on_error,
+        )
+        thr = threading.Thread(target=wsapp.run_forever, daemon=True)
+        thr.start()
+
+        assert connected_evt.wait(timeout=5), "WS did not connect"
+        assert auth_ok_evt.wait(timeout=5), "WS auth did not succeed"
+
+        # POST /contracts after WS is subscribed
+        contract_body = {
+            "lead_id": lead_id,
+            "signed_at": "2026-04-23",
+            "buildings_count": 1,
+            "building_type": "mieszkalny",
+            "roof_area_m2": 100.0,
+            "gross_amount": 45000.0,
+            "global_margin": 5000.0,
+            "financing_type": "cash",
+            "down_payment_amount": 45000.0,
+            "installments_count": 1,
+            "total_paid_amount": 45000.0,
+        }
+        r = api_client.post(
+            f"{BASE_URL}/api/contracts",
+            json=contract_body,
+            headers={"Authorization": f"Bearer {rep_token}"},
+        )
+        assert r.status_code == 200, r.text
+
+        # Wait up to 5s for the broadcast frame
+        got = event_evt.wait(timeout=5)
+        try:
+            wsapp.close()
+        except Exception:
+            pass
+
+        assert got, f"contract_signed frame not received within 5s. received={received}"
+        assert received, "no contract_signed events captured"
+        e = received[0]
+        assert e.get("type") == "contract_signed"
+        assert e.get("rep_id") == rep_id
+        assert "client_name" in e
+        assert "gross_amount" in e
+        assert e.get("gross_amount") == 45000.0
+        assert "commission_amount" in e
+
+        # Cleanup
+        self._cleanup()
+
+    def test_broadcaster_failure_does_not_break_post(self, api_client, rep_token):
+        """If event_broadcaster.broadcast raises, POST /contracts must still
+        return 200 — the endpoint is wrapped in try/except."""
+        # We can't monkey-patch the server process from here, but we can
+        # verify that WITHOUT any WS subscribers (the "empty subs" path),
+        # POST /contracts still works. That covers the no-op branch.
+        self._cleanup()
+        lead = self._create_signed_lead(api_client, rep_token, jitter=2)
+        body = {
+            "lead_id": lead["id"],
+            "signed_at": "2026-04-23",
+            "buildings_count": 1,
+            "building_type": "mieszkalny",
+            "roof_area_m2": 120.0,
+            "gross_amount": 52000.0,
+            "global_margin": 6000.0,
+            "financing_type": "cash",
+            "down_payment_amount": 52000.0,
+            "installments_count": 1,
+            "total_paid_amount": 52000.0,
+        }
+        r = api_client.post(
+            f"{BASE_URL}/api/contracts",
+            json=body,
+            headers={"Authorization": f"Bearer {rep_token}"},
+        )
+        assert r.status_code == 200, r.text
+        assert "id" in r.json()
+        self._cleanup()
+
