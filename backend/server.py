@@ -2020,6 +2020,26 @@ async def root():
     return {"message": "OZE CRM API", "status": "ok"}
 
 
+# ── Temporary download endpoint (token-gated, one-off backup serving) ────────
+# REMOVE THIS BLOCK when no longer needed. Token is rotated each deploy.
+from fastapi.responses import FileResponse as _FileResponse  # local import
+_DOWNLOAD_TOKEN = "DKeA5HMSXK-TIphmWeGXpsxB7eKCDJYV"
+_DOWNLOAD_PATH = "/tmp/oze-crm-app.zip"
+
+
+@api.get("/_download/{token}/oze-crm-app.zip")
+async def _download_archive(token: str):
+    if token != _DOWNLOAD_TOKEN:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not os.path.exists(_DOWNLOAD_PATH):
+        raise HTTPException(status_code=404, detail="Archive not found")
+    return _FileResponse(
+        _DOWNLOAD_PATH,
+        media_type="application/zip",
+        filename="oze-crm-app.zip",
+    )
+
+
 # ── CORS whitelist (Batch A — security hardening) ────────────────────────────
 # PRODUCTION: zawsze ustawić CORS_ALLOWED_ORIGINS w env vars Emergent (CSV).
 CORS_ALLOWED_ORIGINS_RAW = os.environ.get("CORS_ALLOWED_ORIGINS", "").strip()
