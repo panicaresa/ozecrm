@@ -21,6 +21,7 @@ import { Button } from "../../src/components/Button";
 import { Field } from "../../src/components/Field";
 import { api, formatApiError } from "../../src/lib/api";
 import { DateTimeField } from "../../src/components/DateTimeField";
+import { enqueueLead, isNetworkError } from "../../src/lib/offlineQueue";
 
 const STATUSES = ["nowy", "umowione", "decyzja", "podpisana", "nie_zainteresowany"];
 const BUILDING_TYPES: { value: "mieszkalny" | "gospodarczy"; label: string }[] = [
@@ -148,6 +149,9 @@ export default function AddLead() {
     }
   };
 
+  // Sprint 1.5 — reused idempotency key (same per screen lifecycle)
+  const idempotencyKey = useRef<string>(`lead-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
+
   const performSave = async (extra: Record<string, any> = {}) => {
     const body: Record<string, any> = {
       client_name: clientName.trim(),
@@ -165,7 +169,10 @@ export default function AddLead() {
       meeting_at: meetingAt ? meetingAt.toISOString() : null,
       ...extra,
     };
-    await api.post("/leads", body);
+    await api.post("/leads", body, {
+      headers: { "Idempotency-Key": idempotencyKey.current },
+      timeout: 5000,
+    });
     stopGpsWatch();
     router.back();
   };
@@ -269,7 +276,37 @@ export default function AddLead() {
     try {
       await performSave();
     } catch (e: any) {
-      if (!handleCollisionError(e)) {
+      // Sprint 1.5 — network-level failures fall back to the offline queue.
+      // Anti-collision 409s are still handled by handleCollisionError first.
+      if (handleCollisionError(e)) {
+        // noop — dialog handled
+      } else if (isNetworkError(e)) {
+        try {
+          const body: Record<string, any> = {
+            client_name: clientName.trim(),
+            phone: phone.trim() || null,
+            address: address.trim() || null,
+            postal_code: zip.trim() || null,
+            apartment_number: apartmentNumber.trim() || null,
+            note: note.trim() || null,
+            building_area: area ? Number(area.replace(",", ".")) : null,
+            building_type: buildingType,
+            status,
+            latitude,
+            longitude,
+            meeting_at: meetingAt ? meetingAt.toISOString() : null,
+          };
+          await enqueueLead(body, photo);
+          stopGpsWatch();
+          Alert.alert(
+            "📶 Brak zasięgu",
+            "Zapisano lokalnie. Wyślę automatycznie gdy wróci połączenie.",
+            [{ text: "OK", onPress: () => router.back() }]
+          );
+        } catch (enqueueErr: any) {
+          setErr(formatApiError(enqueueErr, "Nie udało się zapisać leada lokalnie"));
+        }
+      } else {
         setErr(formatApiError(e, "Nie udało się zapisać leada"));
       }
     } finally {

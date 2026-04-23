@@ -13,6 +13,7 @@ import { api, formatApiError } from "../../src/lib/api";
 import { Button } from "../../src/components/Button";
 import { BrandLogo } from "../../src/components/BrandLogo";
 import { CommissionCalculator } from "../../src/components/CommissionCalculator";
+import { QueueBadge } from "../../src/components/QueueBadge";
 
 interface RepSummary {
   total_leads: number;
@@ -150,9 +151,12 @@ export default function RepHome() {
       <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
         <View style={styles.topbar}>
           <BrandLogo height={28} testID="rep-brand-logo" />
-          <TouchableOpacity style={styles.iconBtn} onPress={handleLogout} testID="logout-button">
-            <Feather name="log-out" size={18} color={colors.textInverse} />
-          </TouchableOpacity>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+            <QueueBadge />
+            <TouchableOpacity style={styles.iconBtn} onPress={handleLogout} testID="logout-button">
+              <Feather name="log-out" size={18} color={colors.textInverse} />
+            </TouchableOpacity>
+          </View>
         </View>
         <View style={styles.header}>
           <View style={{ flex: 1 }}>

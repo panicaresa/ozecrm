@@ -447,9 +447,19 @@ async def list_leads(user: Dict[str, Any] = Depends(get_current_user)):
 
 
 @api.post("/leads")
-async def create_lead(body: LeadIn, user: Dict[str, Any] = Depends(get_current_user)):
+async def create_lead(body: LeadIn, request: Request, user: Dict[str, Any] = Depends(get_current_user)):
     if body.status not in LEAD_STATUSES:
         raise HTTPException(status_code=400, detail="Invalid status")
+
+    # Sprint 1.5 — idempotency replay guard (MUST run before photo/anti-collision checks)
+    idempotency_key = request.headers.get("Idempotency-Key")
+    if idempotency_key:
+        existing_idem = await db.leads.find_one({"idempotency_key": idempotency_key}, {"_id": 0})
+        if existing_idem:
+            # Return the previously-created lead — identical response shape.
+            existing_idem["created_at"] = iso(existing_idem.get("created_at"))
+            existing_idem["updated_at"] = iso(existing_idem.get("updated_at"))
+            return existing_idem
 
     # Faza 2.1 — wymóg zdjęcia (anti-fake leads)
     if user["role"] == "handlowiec":
@@ -592,6 +602,9 @@ async def create_lead(body: LeadIn, user: Dict[str, Any] = Depends(get_current_u
             "updated_at": now(),
         }
     )
+    # Sprint 1.5 — persist idempotency_key if client sent one (sparse unique index)
+    if idempotency_key:
+        doc["idempotency_key"] = idempotency_key
     await db.leads.insert_one(doc)
     out = await db.leads.find_one({"id": lead_id}, {"_id": 0})
     out["created_at"] = iso(out.get("created_at"))
@@ -1929,6 +1942,8 @@ async def ensure_indexes_and_migrations():
     await db.contracts.create_index("idempotency_key", sparse=True)
     await db.contract_audit_log.create_index("contract_id")
     await db.contract_audit_log.create_index("changed_at")
+    # Sprint 1.5 — idempotency for offline queue retry of POST /leads
+    await db.leads.create_index("idempotency_key", sparse=True, unique=True)
 
     # Migration: ensure must_change_password flag exists on every user (default False)
     try:

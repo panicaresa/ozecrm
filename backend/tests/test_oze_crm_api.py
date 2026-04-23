@@ -1486,3 +1486,129 @@ class TestAntiCollisionV2:
 
         self._cleanup_ctx("stats-end")
 
+
+
+# ============ SPRINT 1.5 — LEAD IDEMPOTENCY ============
+
+
+class TestLeadIdempotency:
+    """POST /api/leads supports Idempotency-Key header for offline-queue retries."""
+
+    BASE_LAT = 53.5100
+    BASE_LNG = 19.5100
+
+    def _photo(self):
+        return "iVBORw0KGgo" + "A" * 200
+
+    def _cleanup(self):
+        import pymongo
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        try:
+            mc["oze_crm"]["leads"].delete_many(
+                {"latitude": {"$gte": self.BASE_LAT - 0.05, "$lte": self.BASE_LAT + 0.05}}
+            )
+            # Drop explicit idempotency_keys we used
+            mc["oze_crm"]["leads"].delete_many(
+                {"idempotency_key": {"$regex": "^idem-test-"}}
+            )
+        finally:
+            mc.close()
+
+    def test_lead_idempotency_key_replay(self, api_client, rep_token):
+        """Two POSTs with the same Idempotency-Key → one lead in DB, same id returned."""
+        self._cleanup()
+        import uuid as _u
+        key = f"idem-test-{_u.uuid4().hex}"
+        payload = {
+            "client_name": "IdemTest_A",
+            "latitude": self.BASE_LAT,
+            "longitude": self.BASE_LNG,
+            "status": "nowy",
+            "photo_base64": self._photo(),
+        }
+        r1 = api_client.post(
+            f"{BASE_URL}/api/leads",
+            json=payload,
+            headers={"Authorization": f"Bearer {rep_token}", "Idempotency-Key": key},
+        )
+        assert r1.status_code == 200, r1.text
+        lead_id_1 = r1.json()["id"]
+
+        # Replay — same key
+        r2 = api_client.post(
+            f"{BASE_URL}/api/leads",
+            json=payload,
+            headers={"Authorization": f"Bearer {rep_token}", "Idempotency-Key": key},
+        )
+        assert r2.status_code == 200, r2.text
+        lead_id_2 = r2.json()["id"]
+        assert lead_id_1 == lead_id_2, "Replay must return the same lead id"
+
+        # DB must contain exactly ONE lead with this idempotency_key
+        import pymongo
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        try:
+            count = mc["oze_crm"]["leads"].count_documents({"idempotency_key": key})
+            assert count == 1, f"Expected 1 lead with key, got {count}"
+        finally:
+            mc.close()
+        self._cleanup()
+
+    def test_lead_idempotency_different_keys(self, api_client, rep_token):
+        """Two POSTs with DIFFERENT Idempotency-Key → two leads (when location allows)."""
+        self._cleanup()
+        import uuid as _u
+        k1 = f"idem-test-{_u.uuid4().hex}"
+        k2 = f"idem-test-{_u.uuid4().hex}"
+        # Different locations to avoid anti-collision
+        p1 = {
+            "client_name": "IdemTest_DiffA",
+            "latitude": self.BASE_LAT,
+            "longitude": self.BASE_LNG,
+            "status": "nowy",
+            "photo_base64": self._photo(),
+        }
+        p2 = {
+            "client_name": "IdemTest_DiffB",
+            "latitude": self.BASE_LAT + 0.01,  # ~1.1 km north
+            "longitude": self.BASE_LNG,
+            "status": "nowy",
+            "photo_base64": self._photo(),
+        }
+        r1 = api_client.post(
+            f"{BASE_URL}/api/leads",
+            json=p1,
+            headers={"Authorization": f"Bearer {rep_token}", "Idempotency-Key": k1},
+        )
+        assert r1.status_code == 200
+        r2 = api_client.post(
+            f"{BASE_URL}/api/leads",
+            json=p2,
+            headers={"Authorization": f"Bearer {rep_token}", "Idempotency-Key": k2},
+        )
+        assert r2.status_code == 200
+        assert r1.json()["id"] != r2.json()["id"]
+        self._cleanup()
+
+    def test_lead_without_idempotency_key_still_works(self, api_client, rep_token):
+        """Backward compat: POST /leads without Idempotency-Key header works as before."""
+        self._cleanup()
+        payload = {
+            "client_name": "IdemTest_NoKey",
+            "latitude": self.BASE_LAT,
+            "longitude": self.BASE_LNG,
+            "status": "nowy",
+            "photo_base64": self._photo(),
+        }
+        r = api_client.post(
+            f"{BASE_URL}/api/leads",
+            json=payload,
+            headers={"Authorization": f"Bearer {rep_token}"},
+        )
+        assert r.status_code == 200, r.text
+        assert "id" in r.json()
+        # idempotency_key should NOT be set
+        saved = r.json()
+        assert saved.get("idempotency_key") in (None, "", False)
+        self._cleanup()
+

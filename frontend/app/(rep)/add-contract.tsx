@@ -18,6 +18,7 @@ import { colors, radius, spacing } from "../../src/theme";
 import { api, formatApiError } from "../../src/lib/api";
 import { fmtPln } from "../../src/lib/offerEngine";
 import { DateTimeField } from "../../src/components/DateTimeField";
+import { enqueueContract, isNetworkError } from "../../src/lib/offlineQueue";
 
 type Financing = "credit" | "cash";
 type BuildingType = "mieszkalny" | "gospodarczy";
@@ -82,25 +83,26 @@ export default function AddContract() {
       return;
     }
     setSaving(true);
+    const body: Record<string, unknown> = {
+      lead_id: leadId,
+      signed_at: signedAt,
+      buildings_count: parseInt(buildingsCount) || 1,
+      building_type: buildingType,
+      roof_area_m2: asNumber(roofArea),
+      gross_amount: asNumber(grossAmount),
+      global_margin: asNumber(globalMargin),
+      financing_type: financing,
+      note: note || undefined,
+    };
+    if (financing === "cash") {
+      body.down_payment_amount = asNumber(downPayment);
+      body.installments_count = parseInt(installments) || 1;
+      body.total_paid_amount = asNumber(downPayment);
+    }
     try {
-      const body: Record<string, unknown> = {
-        lead_id: leadId,
-        signed_at: signedAt,
-        buildings_count: parseInt(buildingsCount) || 1,
-        building_type: buildingType,
-        roof_area_m2: asNumber(roofArea),
-        gross_amount: asNumber(grossAmount),
-        global_margin: asNumber(globalMargin),
-        financing_type: financing,
-        note: note || undefined,
-      };
-      if (financing === "cash") {
-        body.down_payment_amount = asNumber(downPayment);
-        body.installments_count = parseInt(installments) || 1;
-        body.total_paid_amount = asNumber(downPayment);
-      }
       const res = await api.post("/contracts", body, {
         headers: { "Idempotency-Key": idempotencyKey.current },
+        timeout: 5000,
       });
       Alert.alert(
         "Umowa dodana",
@@ -109,8 +111,22 @@ export default function AddContract() {
         }`,
         [{ text: "OK", onPress: () => router.back() }]
       );
-    } catch (e) {
-      Alert.alert("Błąd zapisu", formatApiError(e));
+    } catch (e: any) {
+      // Sprint 1.5 — network-level failures fall back to the offline queue.
+      if (isNetworkError(e)) {
+        try {
+          await enqueueContract(body);
+          Alert.alert(
+            "📶 Brak zasięgu",
+            "Zapisano lokalnie. Wyślę automatycznie gdy wróci połączenie.",
+            [{ text: "OK", onPress: () => router.back() }]
+          );
+        } catch (enqErr) {
+          Alert.alert("Błąd zapisu", formatApiError(enqErr, "Nie udało się zapisać lokalnie"));
+        }
+      } else {
+        Alert.alert("Błąd zapisu", formatApiError(e));
+      }
     } finally {
       setSaving(false);
     }
