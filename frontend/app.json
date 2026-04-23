@@ -16,7 +16,10 @@
         "NSLocationWhenInUseUsageDescription": "Geotag leadów w terenie",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "Śledzenie trasy handlowca w terenie (także w tle)",
         "NSLocationAlwaysUsageDescription": "Śledzenie trasy handlowca w terenie w tle",
-        "UIBackgroundModes": ["location", "fetch"]
+        "UIBackgroundModes": [
+          "location",
+          "fetch"
+        ]
       }
     },
     "android": {
@@ -68,7 +71,8 @@
           "isAndroidBackgroundLocationEnabled": true,
           "isAndroidForegroundServiceEnabled": true
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": true
