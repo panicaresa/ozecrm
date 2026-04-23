@@ -10,6 +10,7 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "pl.grupaoze.crm",
       "infoPlist": {
         "NSCameraUsageDescription": "Robienie zdjęć obiektów do leadów",
         "NSPhotoLibraryUsageDescription": "Wybór zdjęć obiektów dla leadów",
@@ -23,6 +24,7 @@
       }
     },
     "android": {
+      "package": "pl.grupaoze.crm",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#FF4D00"

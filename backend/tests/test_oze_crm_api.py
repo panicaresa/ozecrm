@@ -316,7 +316,8 @@ class TestLeads:
             "postal_code": "80-001",
             "latitude": 54.372,
             "longitude": 18.638,
-            "status": "nowy"
+            "status": "nowy",
+            "photo_base64": "iVBORw0KGgo" + "A" * 200  # min 100 chars, fake PNG prefix
         }
         
         create_response = api_client.post(
