@@ -19,6 +19,7 @@ import { colors, radius, spacing, statusColor, statusLabel } from "../../src/the
 import { Button } from "../../src/components/Button";
 import { Field } from "../../src/components/Field";
 import { api, formatApiError } from "../../src/lib/api";
+import { DateTimeField } from "../../src/components/DateTimeField";
 
 const STATUSES = ["nowy", "umowione", "decyzja", "podpisana", "nie_zainteresowany"];
 const BUILDING_TYPES: { value: "mieszkalny" | "gospodarczy"; label: string }[] = [
@@ -38,6 +39,7 @@ export default function AddLead() {
   const [status, setStatus] = useState("nowy");
   const [latitude, setLatitude] = useState<number | null>(null);
   const [longitude, setLongitude] = useState<number | null>(null);
+  const [meetingAt, setMeetingAt] = useState<Date | null>(null);
   const [photo, setPhoto] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -90,6 +92,16 @@ export default function AddLead() {
       setErr("Podaj imię i nazwisko klienta");
       return;
     }
+    // Faza 2.1 — wymagane zdjęcie
+    if (!photo) {
+      setErr("Zdjęcie obiektu jest wymagane. Dotknij okno powyżej, aby je dodać.");
+      return;
+    }
+    // Faza 2.1 — meeting_at wymagane dla statusu "umowione"
+    if (status === "umowione" && !meetingAt) {
+      setErr("Dla statusu „Umówione" ustaw datę i godzinę spotkania.");
+      return;
+    }
     setBusy(true);
     try {
       await api.post("/leads", {
@@ -104,6 +116,7 @@ export default function AddLead() {
         latitude,
         longitude,
         photo_base64: photo,
+        meeting_at: meetingAt ? meetingAt.toISOString() : null,
       });
       router.back();
     } catch (e) {
@@ -123,14 +136,15 @@ export default function AddLead() {
           <Text style={styles.title}>Nowy lead</Text>
         </View>
         <ScrollView contentContainerStyle={{ padding: spacing.md, paddingBottom: 100 }} keyboardShouldPersistTaps="handled">
-          {/* Photo */}
-          <TouchableOpacity style={styles.photoBox} onPress={takePhoto} testID="take-photo-button" activeOpacity={0.8}>
+          {/* Photo — REQUIRED */}
+          <TouchableOpacity style={[styles.photoBox, !photo && styles.photoBoxRequired]} onPress={takePhoto} testID="take-photo-button" activeOpacity={0.8}>
             {photo ? (
               <Image source={{ uri: photo }} style={styles.photoImg} />
             ) : (
               <View style={{ alignItems: "center", gap: 6 }}>
-                <Feather name="camera" size={28} color={colors.textSecondary} />
-                <Text style={styles.photoText}>Dotknij, aby zrobić zdjęcie obiektu</Text>
+                <Feather name="camera" size={28} color={colors.error} />
+                <Text style={[styles.photoText, { color: colors.error, fontWeight: "800" }]}>📸 Zdjęcie obiektu (wymagane)</Text>
+                <Text style={styles.photoText}>Dotknij, aby zrobić zdjęcie</Text>
                 <TouchableOpacity onPress={pickImage}><Text style={styles.linkText}>lub wybierz z galerii</Text></TouchableOpacity>
               </View>
             )}
@@ -215,6 +229,8 @@ const styles = StyleSheet.create({
   back: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.paper, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.border },
   title: { fontSize: 20, fontWeight: "900", color: colors.textPrimary },
   photoBox: { height: 180, borderRadius: radius.lg, borderWidth: 2, borderStyle: "dashed", borderColor: colors.border, alignItems: "center", justifyContent: "center", backgroundColor: colors.paper, marginBottom: spacing.md, overflow: "hidden" },
+  photoBoxRequired: { borderColor: colors.error, backgroundColor: "#FEF2F2" },
+  meetingBlock: { marginBottom: spacing.md, padding: spacing.md, borderRadius: radius.md, borderWidth: 1, borderColor: colors.primary, backgroundColor: `${colors.primary}08` },
   photoImg: { width: "100%", height: "100%" },
   photoText: { color: colors.textSecondary, fontSize: 13 },
   linkText: { color: colors.secondary, fontWeight: "700", fontSize: 12, textDecorationLine: "underline" },

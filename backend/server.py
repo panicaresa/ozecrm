@@ -315,6 +315,33 @@ async def delete_user(user_id: str, admin: Dict[str, Any] = Depends(require_role
     return {"ok": True}
 
 
+@api.get("/leads/territory-map")
+async def leads_territory_map(user: Dict[str, Any] = Depends(get_current_user)):
+    """Lightweight endpoint — returns GPS coords of all leads from the last 6 months
+    to help handlowiec avoid duplicate work. No client data exposed.
+    Handlowiec sees ALL company leads (grey pins), manager/admin see the same.
+    """
+    cutoff = now() - timedelta(days=180)
+    q = {
+        "created_at": {"$gte": cutoff},
+        "latitude": {"$ne": None},
+        "longitude": {"$ne": None},
+        "status": {"$nin": ["nie_zainteresowany"]},
+    }
+    docs = await db.leads.find(q, {"_id": 0, "id": 1, "latitude": 1, "longitude": 1, "assigned_to": 1, "status": 1}).to_list(5000)
+    out = []
+    for d in docs:
+        is_own = (d.get("assigned_to") == user["id"])
+        out.append({
+            "id": d["id"],
+            "lat": d["latitude"],
+            "lng": d["longitude"],
+            "is_own": is_own,
+            "status": d.get("status"),
+        })
+    return out
+
+
 @api.get("/leads")
 async def list_leads(user: Dict[str, Any] = Depends(get_current_user)):
     if user["role"] == "admin":
@@ -336,6 +363,62 @@ async def list_leads(user: Dict[str, Any] = Depends(get_current_user)):
 async def create_lead(body: LeadIn, user: Dict[str, Any] = Depends(get_current_user)):
     if body.status not in LEAD_STATUSES:
         raise HTTPException(status_code=400, detail="Invalid status")
+
+    # Faza 2.1 — wymóg zdjęcia (anti-fake leads)
+    if user["role"] == "handlowiec":
+        if not body.photo_base64 or len(body.photo_base64) < 100:
+            raise HTTPException(
+                status_code=400,
+                detail="Zdjęcie obiektu jest wymagane przy dodaniu leada.",
+            )
+
+    # Faza 2.1 — walidacja meeting_at dla statusu "umowione"
+    if body.meeting_at:
+        parsed_m = _parse_iso_dt(body.meeting_at)
+        if parsed_m is None:
+            raise HTTPException(status_code=400, detail="Nieprawidłowy format meeting_at.")
+        cur = now()
+        if parsed_m < cur - timedelta(days=1):
+            raise HTTPException(status_code=400, detail="Termin spotkania nie może być wcześniejszy niż wczoraj.")
+        if parsed_m > cur + timedelta(days=730):
+            raise HTTPException(status_code=400, detail="Termin spotkania nie może być później niż 2 lata w przód.")
+
+    # Faza 2.1 — Radar Dubli (anti-collision 50m)
+    if body.latitude is not None and body.longitude is not None:
+        # Coarse box filter first (~0.001 deg ≈ 111m), then precise haversine
+        box = 0.001
+        nearby_candidates = await db.leads.find(
+            {
+                "latitude": {"$gte": body.latitude - box, "$lte": body.latitude + box},
+                "longitude": {"$gte": body.longitude - box, "$lte": body.longitude + box},
+                "status": {"$nin": ["nie_zainteresowany"]},
+            },
+            {"_id": 0, "latitude": 1, "longitude": 1, "assigned_to": 1, "owner_manager_id": 1, "client_name": 1, "created_at": 1},
+        ).to_list(100)
+        six_months_ago = now() - timedelta(days=180)
+        for cand in nearby_candidates:
+            created = _parse_iso_dt(cand.get("created_at")) or now()
+            if created < six_months_ago:
+                continue
+            lat2 = cand.get("latitude")
+            lng2 = cand.get("longitude")
+            if lat2 is None or lng2 is None:
+                continue
+            dist = _haversine_m(body.latitude, body.longitude, lat2, lng2)
+            if dist < 50.0:
+                # Resolve owner for error message
+                owner_name = "innego handlowca"
+                if cand.get("assigned_to"):
+                    owner = await db.users.find_one(
+                        {"id": cand["assigned_to"]}, {"_id": 0, "name": 1, "email": 1}
+                    )
+                    if owner:
+                        owner_name = owner.get("name") or owner.get("email") or owner_name
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Zbyt blisko! Pod tym adresem istnieje już lead w systemie. Należy on do {owner_name}.",
+                )
+
     lead_id = str(uuid.uuid4())
     assigned = body.assigned_to or (user["id"] if user["role"] == "handlowiec" else None)
     owner_manager = None
@@ -344,6 +427,9 @@ async def create_lead(body: LeadIn, user: Dict[str, Any] = Depends(get_current_u
     elif user["role"] == "handlowiec" and user.get("manager_id"):
         owner_manager = user["manager_id"]
     doc = body.dict()
+    # Parse meeting_at properly if provided
+    if body.meeting_at:
+        doc["meeting_at"] = _parse_iso_dt(body.meeting_at)
     doc.update(
         {
             "id": lead_id,
@@ -509,25 +595,38 @@ def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
 @api.put("/rep/location")
 async def push_rep_location(body: RepLocationIn, user: Dict[str, Any] = Depends(require_roles("handlowiec", "manager", "admin"))):
     ts = now()
-    # Fetch previous point to compute track polyline increment
+    # Fetch previous point to compute track polyline increment + session stats
     prev = await db.rep_locations.find_one({"user_id": user["id"]}, {"_id": 0})
     track: List[Dict[str, Any]] = list(prev.get("track", [])) if prev else []
+    session_distance_m = float(prev.get("session_distance_m") or 0.0) if prev else 0.0
+    session_started_at = prev.get("session_started_at") if prev else None
+    was_active = bool(prev.get("is_active")) if prev else False
+    # If session not active, start a new one
+    if not was_active:
+        session_distance_m = 0.0
+        session_started_at = ts
+        track = []  # reset track on new session
     # Reset track at midnight UTC (simple daily rollover)
-    if track:
+    elif track:
         last_ts_raw = track[-1].get("t")
         if last_ts_raw:
             try:
                 last_ts = datetime.fromisoformat(last_ts_raw.replace("Z", "+00:00"))
                 if last_ts.date() != ts.date():
-                    track = []  # new day — reset
+                    track = []
+                    session_distance_m = 0.0
+                    session_started_at = ts
             except Exception:
                 pass
-    # Only append if moved > MIN_TRACK_DELTA_METERS from last point
+    # Compute distance from last point; append if moved > MIN_TRACK_DELTA_METERS
     add_point = True
     if track:
         last = track[-1]
-        if _haversine_m(last["lat"], last["lng"], body.latitude, body.longitude) < MIN_TRACK_DELTA_METERS:
+        delta = _haversine_m(last["lat"], last["lng"], body.latitude, body.longitude)
+        if delta < MIN_TRACK_DELTA_METERS:
             add_point = False
+        else:
+            session_distance_m += delta
     if add_point:
         track.append({"lat": body.latitude, "lng": body.longitude, "t": ts.isoformat()})
         if len(track) > MAX_TRACK_POINTS:
@@ -543,6 +642,8 @@ async def push_rep_location(body: RepLocationIn, user: Dict[str, Any] = Depends(
         "is_active": True,
         "updated_at": ts,
         "track": track,
+        "session_started_at": session_started_at,
+        "session_distance_m": round(session_distance_m, 2),
     }
     await db.rep_locations.update_one({"user_id": user["id"]}, {"$set": doc}, upsert=True)
     # Broadcast via WS (non-blocking scope: subs already scoped)
@@ -568,7 +669,17 @@ async def push_rep_location(body: RepLocationIn, user: Dict[str, Any] = Depends(
 
 @api.delete("/rep/location")
 async def stop_rep_tracking(user: Dict[str, Any] = Depends(require_roles("handlowiec", "manager", "admin"))):
-    await db.rep_locations.update_one({"user_id": user["id"]}, {"$set": {"is_active": False, "updated_at": now()}})
+    # Faza 2.1 — reset session stats on stop
+    await db.rep_locations.update_one(
+        {"user_id": user["id"]},
+        {
+            "$set": {
+                "is_active": False,
+                "updated_at": now(),
+                "session_ended_at": now(),
+            }
+        },
+    )
     try:
         await broadcaster.broadcast(
             "location_stop",
@@ -578,6 +689,107 @@ async def stop_rep_tracking(user: Dict[str, Any] = Depends(require_roles("handlo
     except Exception as e:
         logger.warning(f"WS broadcast failed: {e}")
     return {"ok": True}
+
+
+@api.get("/rep/work-status")
+async def my_work_status(user: Dict[str, Any] = Depends(get_current_user)):
+    """Returns current work-mode state for the logged-in user (used by frontend
+    to gate "Add lead" / "Offer generator" buttons for handlowiec role)."""
+    loc = await db.rep_locations.find_one({"user_id": user["id"]}, {"_id": 0})
+    if not loc:
+        return {
+            "is_working": False,
+            "session_seconds": 0,
+            "session_distance_m": 0.0,
+            "latitude": None,
+            "longitude": None,
+        }
+    active = bool(loc.get("is_active")) and (
+        isinstance(loc.get("updated_at"), datetime)
+        and (now() - (loc["updated_at"] if loc["updated_at"].tzinfo else loc["updated_at"].replace(tzinfo=timezone.utc))).total_seconds() < 30 * 60
+    )
+    session_seconds = 0
+    session_started = loc.get("session_started_at")
+    if active and isinstance(session_started, datetime):
+        if session_started.tzinfo is None:
+            session_started = session_started.replace(tzinfo=timezone.utc)
+        session_seconds = int((now() - session_started).total_seconds())
+    return {
+        "is_working": active,
+        "session_seconds": session_seconds,
+        "session_distance_m": round(float(loc.get("session_distance_m") or 0.0), 1),
+        "latitude": loc.get("latitude"),
+        "longitude": loc.get("longitude"),
+        "updated_at": iso(loc.get("updated_at")),
+    }
+
+
+@api.get("/users/{user_id}/profile")
+async def rep_profile(user_id: str, user: Dict[str, Any] = Depends(get_current_user)):
+    """Drill-down profile for a specific rep (Faza 2.1).
+    Accessible by admin, manager (own team), and the rep themselves.
+    """
+    target = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user["role"] == "handlowiec" and user["id"] != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if user["role"] == "manager" and target.get("manager_id") != user["id"] and user_id != user["id"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    # Leads assigned to this rep (last 90 days for drill)
+    leads_raw = await db.leads.find({"assigned_to": user_id}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    for l in leads_raw:
+        l["created_at"] = iso(l.get("created_at"))
+        l["updated_at"] = iso(l.get("updated_at"))
+    status_breakdown: Dict[str, int] = {}
+    for l in leads_raw:
+        s = l.get("status") or "nowy"
+        status_breakdown[s] = status_breakdown.get(s, 0) + 1
+    signed_count = status_breakdown.get("podpisana", 0)
+    meeting_count = status_breakdown.get("umowione", 0)
+
+    # Session stats
+    loc = await db.rep_locations.find_one({"user_id": user_id}, {"_id": 0})
+    session_seconds = 0
+    session_distance_m = 0.0
+    is_working = False
+    if loc:
+        is_working = bool(loc.get("is_active"))
+        if is_working and isinstance(loc.get("session_started_at"), datetime):
+            s = loc["session_started_at"]
+            if s.tzinfo is None:
+                s = s.replace(tzinfo=timezone.utc)
+            session_seconds = int((now() - s).total_seconds())
+        session_distance_m = float(loc.get("session_distance_m") or 0.0)
+
+    # Commission from contracts
+    contracts = await db.contracts.find({"rep_id": user_id}, {"_id": 0}).to_list(500)
+    total_payable = 0.0
+    total_frozen = 0.0
+    for c in contracts:
+        derived = _compute_contract_status(c)
+        if derived["status"] != "cancelled":
+            total_payable += float(derived.get("commission_released") or 0)
+            total_frozen += float(derived.get("commission_frozen") or 0)
+
+    return {
+        "user": serialize_user(target),
+        "kpi": {
+            "total_leads": len(leads_raw),
+            "signed_count": signed_count,
+            "meeting_count": meeting_count,
+            "session_seconds": session_seconds,
+            "session_distance_m": round(session_distance_m, 1),
+            "is_working": is_working,
+            "commission_payable": round(total_payable, 2),
+            "commission_frozen": round(total_frozen, 2),
+            "contracts_count": len([c for c in contracts if not c.get("cancelled")]),
+        },
+        "status_breakdown": status_breakdown,
+        "leads": leads_raw[:50],
+        "track": loc.get("track", []) if loc else [],
+    }
 
 
 DEFAULT_RRSO = [
@@ -711,7 +923,14 @@ async def manager_dashboard(user: Dict[str, Any] = Depends(require_roles("manage
                 ts = ts.replace(tzinfo=timezone.utc)
             delta = (now_ts - ts).total_seconds()
             last_seen_s = int(delta)
-            active = delta < 30 * 60
+            active = delta < 30 * 60 and bool(rl.get("is_active", True))
+        # Faza 2.1 — session stats
+        session_started = rl.get("session_started_at")
+        session_seconds = 0
+        if active and isinstance(session_started, datetime):
+            if session_started.tzinfo is None:
+                session_started = session_started.replace(tzinfo=timezone.utc)
+            session_seconds = int((now_ts - session_started).total_seconds())
         reps_live.append(
             {
                 "user_id": u["id"],
@@ -725,6 +944,8 @@ async def manager_dashboard(user: Dict[str, Any] = Depends(require_roles("manage
                 "last_seen_seconds": last_seen_s,
                 "active": active,
                 "updated_at": iso(ts),
+                "session_seconds": session_seconds,
+                "session_distance_m": round(float(rl.get("session_distance_m") or 0.0), 1),
             }
         )
 

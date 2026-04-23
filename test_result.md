@@ -807,6 +807,265 @@ backend_phase20:
           Test cleanup: all created contracts (3) + leads (3) deleted by
           admin.
 
+backend_phase21:
+  - task: "Phase 2.1 — Required photo_base64 on POST /leads (handlowiec only)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Verified via /app/backend_test_phase21.py (all assertions PASS).
+          - handlowiec POST /api/leads without photo → 400 with Polish message
+            containing "Zdjęcie obiektu jest wymagane" ✅
+          - photo_base64 = "" → 400 ✅
+          - photo_base64 = "x" (len=1 <100) → 400 ✅
+          - photo_base64 = "a"*200 → 200 ✅
+          - manager POST /leads without photo → 200 (handlowiec-only requirement) ✅
+          - admin POST /leads without photo → 200 ✅
+
+  - task: "Phase 2.1 — Anti-collision 50m radius on POST /leads"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Verified via /app/backend_test_phase21.py at a unique coord zone
+          (55.126,19.570) to avoid seed interference.
+          - Lead A at base → 200 ✅
+          - Second lead at ~3m (delta 0.00002 lat/lng) → 409 with Polish
+            "Zbyt blisko! Pod tym adresem istnieje już lead w systemie." ✅
+          - Lead ~500m away (0.005 lat / 0.010 lng) → 200 ✅
+          - Lead ~40m away (0.00035 lat) → 409 ✅
+          - Lead ~60m away (0.0006 lat) → 200 (outside radius) ✅
+          - PATCH Lead A to status=nie_zainteresowany, then retry at ~3m → 200
+            (status=nie_zainteresowany ignored by collision check) ✅
+
+  - task: "Phase 2.1 — meeting_at validation at lead creation"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          POST /api/leads with status=umowione and:
+          - meeting_at +1 year → 200 ✅
+          - meeting_at +3 years → 400 ("później niż 2 lata w przód") ✅
+          - meeting_at = "not a date" → 400 ("Nieprawidłowy format") ✅
+          - meeting_at = 5 days ago → 400 ("wcześniejszy niż wczoraj") ✅
+
+  - task: "Phase 2.1 — GET /api/leads/territory-map"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          - No auth → 401 ✅
+          - handlowiec / manager / admin → 200 array of
+            {id, lat, lng, is_own, status} ✅
+          - Own leads returned with is_own=true for handlowiec ✅
+          - Same lead returned with is_own=false for manager (not assigned to mgr) ✅
+          - Manager + admin see all company leads ✅
+          - Leads with status=nie_zainteresowany are NOT included for any role ✅
+
+  - task: "Phase 2.1 — GET /api/rep/work-status"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          - No auth → 401 ✅
+          - Handlowiec after DELETE /rep/location → 200 with
+            {is_working:false, session_seconds:0, session_distance_m:0.0} ✅
+          - After PUT /rep/location → work-status returns is_working:true,
+            session_seconds >= 0, session_started_at set ✅
+          - After second PUT >10m away → session_distance_m > 0 ✅
+          - After DELETE /rep/location → is_working:false ✅
+          - Manager work-status for self → 200 ✅
+
+  - task: "Phase 2.1 — Session stats in /api/dashboard/manager reps_live"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          After handlowiec pushes 3 PUT /rep/location points:
+          - GET /api/dashboard/manager as manager → 200 ✅
+          - reps_live contains handlowiec entry ✅
+          - entry has session_seconds (>=0) and session_distance_m (>=0) ✅
+
+  - task: "Phase 2.1 — GET /api/users/{user_id}/profile"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          - No auth → 401 ✅
+          - Manager GET own-team handlowiec profile → 200 ✅
+          - Admin GET any handlowiec (including anna) → 200 ✅
+          - Handlowiec GET self → 200 ✅
+          - Handlowiec GET other rep's profile → 403 ✅
+          - Invalid user_id → 404 ✅
+          Response structure verified:
+          - user has {id, email, name, role} ✅
+          - kpi has all required: total_leads, signed_count, meeting_count,
+            session_seconds, session_distance_m, is_working,
+            commission_payable, commission_frozen, contracts_count ✅
+          - status_breakdown present (dict) ✅
+          - leads is list ✅
+          - track is list ✅
+
+  - task: "Phase 2.1 — Regression (calendar/meetings 500 BUG)"
+    implemented: true
+    working: false
+    file: "/app/backend/server.py"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: false
+        agent: "testing"
+        comment: |
+          ❌ REGRESSION BUG — GET /api/calendar/meetings returns 500 Internal
+          Server Error whenever ANY lead created via POST /api/leads with
+          meeting_at coexists with older leads (seeded or PATCHed) whose
+          meeting_at is stored as an ISO string.
+
+          Reproduced deterministically:
+          1. POST /api/leads as handlowiec with status="umowione" and
+             meeting_at=<+1 day ISO> → 200
+          2. GET /api/calendar/meetings → 500
+             Backend log:
+               File "/app/backend/server.py", line 1611, in list_meetings
+                 out.sort(key=lambda x: (x["meeting_at"] or ""))
+               TypeError: '<' not supported between instances of
+               'datetime.datetime' and 'str'
+
+          Root cause:
+          In create_lead (server.py line ~431):
+              if body.meeting_at:
+                  doc["meeting_at"] = _parse_iso_dt(body.meeting_at)
+          This stores meeting_at as a Python datetime object in Mongo.
+          BUT earlier-seeded leads and leads PATCHed via update_lead store
+          meeting_at as an ISO string (update_lead only parses for
+          validation but assigns the raw value, or stores a string).
+          list_meetings (line 1596-1611) returns l.get("meeting_at")
+          verbatim and then sorts. When mixed types are present, Python
+          raises TypeError and FastAPI returns 500.
+
+          Impact:
+          - /api/calendar/meetings is unusable as soon as a new-style lead
+            with meeting_at is created. This is core UX (Kalendarz tab).
+          - Fresh DB with only old-format data still works (admin initial
+            call returned 200 post-cleanup) — hence my review step 8
+            regression for calendar meetings failed.
+
+          Recommended fix (one-liner):
+          In create_lead (line 431-432) — serialize back to ISO string before
+          insert, matching the existing convention:
+              if body.meeting_at:
+                  parsed = _parse_iso_dt(body.meeting_at)
+                  doc["meeting_at"] = parsed.isoformat() if parsed else body.meeting_at
+          OR, more robust, make list_meetings tolerate both:
+              def _mkey(v):
+                  if isinstance(v, datetime): return v.isoformat()
+                  return v or ""
+              out.sort(key=lambda x: _mkey(x["meeting_at"]))
+
+          The other Phase 2.1 changes are green; this is the only regression.
+
+agent_communication:
+  - agent: "testing"
+    message: |
+      Phase 2.1 backend testing COMPLETE — /app/backend_test_phase21.py.
+      Result: 83 PASS / 3 FAIL (2 of the 3 failures were test-harness issues
+      in my initial contract body missing required fields building_type /
+      roof_area_m2 / financing_type — re-verified via /tmp/retest.py,
+      Idempotency-Key works correctly and returns SAME contract id on replay).
+
+      GREEN (all Phase 2.1 focus tasks):
+        ✅ 1) photo_base64 required for handlowiec (400 with "Zdjęcie obiektu
+             jest wymagane"); manager/admin exempt; "a"*200 accepted
+        ✅ 2) Anti-collision 50m radius: 3m/40m → 409 ("Zbyt blisko!"),
+             60m/500m → 200; nie_zainteresowany leads ignored by collision
+        ✅ 3) meeting_at validation on POST /leads:
+             +1y → 200; +3y → 400; malformed → 400; 5d-ago → 400
+             ("wcześniejszy niż wczoraj")
+        ✅ 4) GET /api/leads/territory-map: role-scoped, returns
+             {id,lat,lng,is_own,status}; nie_zainteresowany excluded;
+             handlowiec's own leads have is_own=true
+        ✅ 5) GET /api/rep/work-status: 401 unauth; is_working toggles
+             correctly on PUT/DELETE /rep/location; session_distance_m grows
+             with movement; session_seconds >=0
+        ✅ 6) /api/dashboard/manager reps_live now includes session_seconds
+             and session_distance_m fields
+        ✅ 7) GET /api/users/{user_id}/profile: admin any, manager own team,
+             handlowiec self only; 401/403/404 gates correct; response has
+             full user/kpi/status_breakdown/leads/track structure with all
+             required KPI keys (commission_payable, commission_frozen,
+             contracts_count, etc.)
+        ✅ 8) Regression GREEN: login (3 roles), /api/contracts,
+             /api/dashboard/finance-v2 (cancelled_contracts bucket present),
+             PUT /api/rep/location (track_len returned), GET
+             /api/tracking/track/{rep_id} (fixed since Phase 2.0 — now
+             registered after include_router move), Idempotency-Key on
+             POST /api/contracts returns SAME contract id on replay
+
+      ❌ ONE REAL REGRESSION BUG INTRODUCED BY PHASE 2.1:
+        GET /api/calendar/meetings → 500 whenever a Phase 2.1-created lead
+        with meeting_at coexists with older leads whose meeting_at is a
+        string. Backend log:
+          File "/app/backend/server.py", line 1611, in list_meetings
+            out.sort(key=lambda x: (x["meeting_at"] or ""))
+          TypeError: '<' not supported between instances of
+          'datetime.datetime' and 'str'
+        Root cause: in create_lead (~line 431)
+          doc["meeting_at"] = _parse_iso_dt(body.meeting_at)
+        stores a datetime, while legacy / PATCHed rows are strings. Sort
+        mixes types → 500.
+        Suggested fix (one-liner): serialize to ISO string before insert:
+          if body.meeting_at:
+              parsed = _parse_iso_dt(body.meeting_at)
+              doc["meeting_at"] = parsed.isoformat() if parsed else body.meeting_at
+        OR make list_meetings sort key coerce datetime→isoformat.
+
+      Cleanup: all 11 test leads and 1 test contract deleted by admin.
+      Handlowiec rep_location session stopped. No test residue.
+
+
 agent_communication:
   - agent: "testing"
     message: |

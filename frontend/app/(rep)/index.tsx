@@ -6,6 +6,7 @@ import { useRouter } from "expo-router";
 import * as Location from "expo-location";
 import * as Battery from "expo-battery";
 import { startBackgroundTracking, stopBackgroundTracking, isBackgroundTrackingActive } from "../../src/lib/backgroundTracking";
+import { useWorkStatus, fmtDuration, fmtDistanceKm } from "../../src/lib/useWorkStatus";
 import { colors, radius, spacing } from "../../src/theme";
 import { useAuth } from "../../src/lib/auth";
 import { api, formatApiError } from "../../src/lib/api";
@@ -27,6 +28,12 @@ export default function RepHome() {
   const [summary, setSummary] = useState<RepSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false); // Start/Stop mode
+  const { status: workStatus, refresh: refreshWorkStatus } = useWorkStatus(working ? 10000 : 30000);
+
+  // Sync local "working" state with backend on first mount
+  useEffect(() => {
+    setWorking(workStatus.is_working);
+  }, [workStatus.is_working]);
   const [workLoading, setWorkLoading] = useState(false);
   const [lastPush, setLastPush] = useState<Date | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -166,29 +173,55 @@ export default function RepHome() {
             <Feather name={working ? "square" : "play"} size={28} color="#fff" />
             <Text style={styles.workBtnText}>{working ? "ZATRZYMAJ" : "ROZPOCZNIJ"}</Text>
           </TouchableOpacity>
+          {working && workStatus.is_working && (
+            <View style={styles.sessionStats}>
+              <View style={styles.sessionStat}>
+                <Feather name="clock" size={14} color={colors.secondary} />
+                <Text style={styles.sessionStatValue}>{fmtDuration(workStatus.session_seconds)}</Text>
+              </View>
+              <View style={styles.sessionSep} />
+              <View style={styles.sessionStat}>
+                <Feather name="navigation" size={14} color={colors.secondary} />
+                <Text style={styles.sessionStatValue}>{fmtDistanceKm(workStatus.session_distance_m)}</Text>
+              </View>
+            </View>
+          )}
           <Text style={styles.workHint}>
             {working
               ? "Tryb pracy aktywny · pozycja GPS wysyłana co 30 s"
-              : "Uruchom tryb pracy, aby rozpocząć dzień w terenie"}
+              : "Uruchom tryb pracy, aby odblokować dodawanie leadów i Generator ofert"}
           </Text>
         </View>
 
         {/* Actions */}
         <View style={styles.actions}>
           <Button
-            title="Dodaj leada"
+            title={working ? "Dodaj leada" : "🔒 Dodaj leada (rozpocznij pracę)"}
             variant="primary"
-            icon={<Feather name="user-plus" size={18} color="#fff" />}
-            onPress={() => router.push("/(rep)/add-lead")}
+            icon={<Feather name={working ? "user-plus" : "lock"} size={18} color="#fff" />}
+            onPress={() => {
+              if (!working) {
+                Alert.alert("Tryb pracy wyłączony", "Rozpocznij pracę w terenie, aby odblokować dodawanie leadów.");
+                return;
+              }
+              router.push("/(rep)/add-lead");
+            }}
             testID="add-lead-button"
+            style={!working ? { opacity: 0.5 } : undefined}
           />
           <Button
-            title="Generator ofert OZE"
+            title={working ? "Generator ofert OZE" : "🔒 Generator ofert (rozpocznij pracę)"}
             variant="dark"
-            icon={<Feather name="file-text" size={18} color="#fff" />}
-            onPress={() => router.push("/(rep)/offer-generator")}
+            icon={<Feather name={working ? "file-text" : "lock"} size={18} color="#fff" />}
+            onPress={() => {
+              if (!working) {
+                Alert.alert("Tryb pracy wyłączony", "Rozpocznij pracę w terenie, aby uruchomić Generator ofert.");
+                return;
+              }
+              router.push("/(rep)/offer-generator");
+            }}
             testID="open-offer-generator-button"
-            style={{ marginTop: 10 }}
+            style={[!working ? { opacity: 0.5 } : undefined, { marginTop: 10 }]}
           />
           <Button
             title="Kalendarz spotkań"
@@ -272,6 +305,10 @@ const styles = StyleSheet.create({
   workBtn: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 20, paddingHorizontal: 32, borderRadius: 999, marginVertical: 16, minWidth: 260, justifyContent: "center", shadowColor: "#000", shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
   workBtnText: { color: "#fff", fontSize: 18, fontWeight: "900", letterSpacing: 1 },
   workHint: { color: colors.textInverseSecondary, fontSize: 12, textAlign: "center" },
+  sessionStats: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 10, paddingVertical: 8, paddingHorizontal: 14, borderRadius: 999, backgroundColor: "rgba(16,185,129,0.1)", alignSelf: "center" },
+  sessionStat: { flexDirection: "row", alignItems: "center", gap: 5 },
+  sessionStatValue: { color: colors.secondary, fontWeight: "900", fontSize: 13, fontVariant: ["tabular-nums"] },
+  sessionSep: { width: 1, height: 14, backgroundColor: `${colors.secondary}40` },
   actions: { paddingHorizontal: spacing.md },
   card: { margin: spacing.md, padding: spacing.md, backgroundColor: colors.paper, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border },
   cardTitle: { fontSize: 16, fontWeight: "900", color: colors.textPrimary, marginBottom: 12 },

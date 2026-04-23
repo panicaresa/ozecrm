@@ -7,6 +7,7 @@ import {
   RefreshControl,
   TouchableOpacity,
   ActivityIndicator,
+  TextInput,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
@@ -42,6 +43,8 @@ export default function ManagerDashboard() {
   const [refreshing, setRefreshing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
+  const [filterRepId, setFilterRepId] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
   const [selectedPinId, setSelectedPinId] = useState<string | null>(null);
   const [selectedRepId, setSelectedRepId] = useState<string | null>(null);
   const [layers, setLayers] = useState({ leads: true, reps: true });
@@ -143,9 +146,41 @@ export default function ManagerDashboard() {
 
   const drilldownLeads = useMemo(() => {
     if (selectedPinId) return leads.filter((l) => l.id === selectedPinId);
-    if (filterStatus) return leads.filter((l) => l.status === filterStatus);
+    if (filterStatus || filterRepId || searchTerm) {
+      const q = searchTerm.trim().toLowerCase();
+      return leads.filter((l) => {
+        if (filterStatus && l.status !== filterStatus) return false;
+        if (filterRepId && l.assigned_to !== filterRepId) return false;
+        if (q) {
+          const haystack = [l.client_name, l.phone, l.address].filter(Boolean).join(" ").toLowerCase();
+          if (!haystack.includes(q)) return false;
+        }
+        return true;
+      });
+    }
     return [];
-  }, [leads, filterStatus, selectedPinId]);
+  }, [leads, filterStatus, filterRepId, searchTerm, selectedPinId]);
+
+  // Filter map pins by status / rep / search
+  const filteredPins = useMemo(() => {
+    const allPins = data?.pins || [];
+    const q = searchTerm.trim().toLowerCase();
+    if (!filterStatus && !filterRepId && !q) return allPins;
+    return allPins.filter((p: any) => {
+      if (filterStatus && p.status !== filterStatus) return false;
+      // Match rep filter via leads lookup
+      if (filterRepId) {
+        const lead = leads.find((l) => l.id === p.id);
+        if (!lead || lead.assigned_to !== filterRepId) return false;
+      }
+      if (q) {
+        const lead = leads.find((l) => l.id === p.id);
+        const haystack = [p.client_name, lead?.phone, lead?.address].filter(Boolean).join(" ").toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [data?.pins, filterStatus, filterRepId, searchTerm, leads]);
 
   const drilldownTitle = selectedPinId
     ? "Wybrany lead"
@@ -213,13 +248,66 @@ export default function ManagerDashboard() {
           <CommissionCalculator testID="manager-commission-calculator" />
         </View>
 
+        {/* Faza 2.1 — Search bar + rep filter chips */}
+        <View style={{ marginHorizontal: spacing.md, marginTop: 12 }}>
+          <View style={styles.searchBox}>
+            <Feather name="search" size={18} color={colors.textSecondary} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Szukaj: klient, telefon, adres..."
+              placeholderTextColor={colors.textSecondary}
+              value={searchTerm}
+              onChangeText={setSearchTerm}
+              testID="manager-search-input"
+              returnKeyType="search"
+            />
+            {searchTerm.length > 0 && (
+              <TouchableOpacity onPress={() => setSearchTerm("")} hitSlop={8}>
+                <Feather name="x-circle" size={16} color={colors.textSecondary} />
+              </TouchableOpacity>
+            )}
+          </View>
+          {(data?.rep_progress?.length || 0) > 0 && (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingVertical: 8 }}>
+              <TouchableOpacity
+                style={[styles.filterChip, !filterRepId && styles.filterChipActive]}
+                onPress={() => setFilterRepId(null)}
+                testID="filter-rep-all"
+              >
+                <Feather name="users" size={12} color={!filterRepId ? "#fff" : colors.textPrimary} />
+                <Text style={[styles.filterChipText, !filterRepId && { color: "#fff" }]}>Wszyscy</Text>
+              </TouchableOpacity>
+              {(data?.rep_progress || []).map((r: any) => (
+                <TouchableOpacity
+                  key={r.user_id}
+                  style={[styles.filterChip, filterRepId === r.user_id && styles.filterChipActive]}
+                  onPress={() => setFilterRepId(filterRepId === r.user_id ? null : r.user_id)}
+                  testID={`filter-rep-${r.user_id}`}
+                >
+                  <Text style={[styles.filterChipText, filterRepId === r.user_id && { color: "#fff" }]}>
+                    {(r.name || "").split(" ")[0]}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          )}
+        </View>
+
+
         <View style={styles.sectionCard}>
           <View style={styles.sectionHead}>
             <Text style={styles.sectionTitle}>Cele i postęp</Text>
             <Text style={styles.sectionSub}>Miesiąc</Text>
           </View>
           {(data?.rep_progress || []).map((r: any) => (
-            <ProgressRow rep={r} key={r.user_id} testID={`rep-progress-${r.user_id}`} />
+            <TouchableOpacity
+              key={r.user_id}
+              onPress={() => router.push(`/(manager)/rep/${r.user_id}` as any)}
+              activeOpacity={0.7}
+              testID={`rep-row-${r.user_id}`}
+            >
+              <ProgressRow rep={r} testID={`rep-progress-${r.user_id}`} />
+            </TouchableOpacity>
           ))}
           {(data?.rep_progress?.length || 0) === 0 && (
             <Text style={styles.empty}>Brak przypisanych handlowców</Text>
@@ -293,7 +381,7 @@ export default function ManagerDashboard() {
           </View>
 
           <LeadMap
-            pins={data?.pins || []}
+            pins={filteredPins || []}
             reps={mergedReps || []}
             tracks={tracks || {}}
             layers={layers}
@@ -427,6 +515,11 @@ const styles = StyleSheet.create({
   liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.error, marginLeft: "auto" },
   liveText: { fontSize: 10, fontWeight: "900", color: colors.error, letterSpacing: 1 },
   liveBadge: { position: "absolute", top: 10, right: 10, flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, backgroundColor: "rgba(255,255,255,0.92)", borderWidth: 1, borderColor: colors.border },
+  searchBox: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: colors.paper, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 10 },
+  searchInput: { flex: 1, fontSize: 14, color: colors.textPrimary, fontWeight: "600" },
+  filterChip: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 999, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.paper },
+  filterChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  filterChipText: { fontSize: 12, fontWeight: "800", color: colors.textPrimary },
   kpiGrid: { flexDirection: "row", gap: spacing.sm, paddingHorizontal: spacing.md, marginTop: spacing.sm },
   sectionCard: { backgroundColor: colors.paper, marginHorizontal: spacing.md, marginTop: spacing.md, padding: spacing.md, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border },
   sectionHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },
