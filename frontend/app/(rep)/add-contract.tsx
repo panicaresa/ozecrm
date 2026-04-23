@@ -17,6 +17,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { colors, radius, spacing } from "../../src/theme";
 import { api, formatApiError } from "../../src/lib/api";
 import { fmtPln } from "../../src/lib/offerEngine";
+import { DateTimeField } from "../../src/components/DateTimeField";
 
 type Financing = "credit" | "cash";
 type BuildingType = "mieszkalny" | "gospodarczy";
@@ -143,12 +144,15 @@ export default function AddContract() {
           </View>
 
           <Text style={styles.label}>Data podpisania *</Text>
-          <TextInput
-            style={styles.input}
-            value={signedAt}
-            onChangeText={setSignedAt}
-            placeholder="YYYY-MM-DD"
-            placeholderTextColor={colors.textSecondary}
+          <DateTimeField
+            value={(() => {
+              if (!signedAt) return null;
+              const d = new Date(signedAt + (signedAt.length === 10 ? "T12:00" : ""));
+              return isNaN(d.getTime()) ? null : d;
+            })()}
+            onChange={(d) => setSignedAt(d ? d.toISOString().slice(0, 10) : "")}
+            mode="date"
+            placeholder="Wybierz datę podpisania"
             testID="contract-signed-at"
           />
           <View style={styles.quickRow}>

@@ -314,8 +314,8 @@ class TestLeads:
             "phone": "+48 500 123 456",
             "address": "Testowa 1, Gdańsk",
             "postal_code": "80-001",
-            "latitude": 54.372,
-            "longitude": 18.638,
+            "latitude": 54.36100,
+            "longitude": 18.61100,
             "status": "nowy",
             "photo_base64": "iVBORw0KGgo" + "A" * 200  # min 100 chars, fake PNG prefix
         }
@@ -1214,3 +1214,87 @@ class TestBatchASecurity:
         cleanup = pymongo.MongoClient("mongodb://localhost:27017")
         cleanup["oze_crm"]["users"].delete_one({"id": user_id})
         cleanup.close()
+
+
+
+# ============ BATCH B-FIX — FORCE-CHANGE DEFAULT FOR NEW USERS ============
+
+
+class TestBatchBFixForceChange:
+    """POST /auth/register now defaults must_change_password=True; skip flag available."""
+
+    def _register_fresh(self, api_client, admin_token, skip: bool = False):
+        import uuid as _u
+        email = f"bfix+{_u.uuid4().hex[:8]}@test.com"
+        payload = {
+            "email": email,
+            "password": "initialPass123",
+            "name": "BFix User",
+            "role": "handlowiec",
+        }
+        if skip:
+            payload["skip_password_change"] = True
+        r = api_client.post(
+            f"{BASE_URL}/api/auth/register",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            json=payload,
+        )
+        assert r.status_code == 200, f"register failed: {r.status_code} {r.text}"
+        user_obj = r.json()
+        return email, user_obj
+
+    def _login(self, api_client, email, password="initialPass123"):
+        r = api_client.post(f"{BASE_URL}/api/auth/login", json={"email": email, "password": password})
+        assert r.status_code == 200
+        return r.json()["access_token"], r.json()["user"]
+
+    def test_new_user_has_must_change_password_flag(self, api_client, admin_token):
+        _, user_obj = self._register_fresh(api_client, admin_token)
+        assert user_obj.get("must_change_password") is True, (
+            f"Expected must_change_password=True by default, got {user_obj}"
+        )
+
+    def test_new_user_cannot_access_dashboard_without_changing(self, api_client, admin_token):
+        email, _ = self._register_fresh(api_client, admin_token)
+        token, _ = self._login(api_client, email)
+        r = api_client.get(
+            f"{BASE_URL}/api/dashboard/rep",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 403, f"Expected 403, got {r.status_code}: {r.text}"
+        assert "Password change required" in r.text
+
+    def test_new_user_can_change_password_and_access_dashboard(self, api_client, admin_token):
+        email, _ = self._register_fresh(api_client, admin_token)
+        token, _ = self._login(api_client, email)
+        # Change password
+        r_chg = api_client.post(
+            f"{BASE_URL}/api/auth/change-password",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"current_password": "initialPass123", "new_password": "BrandNewPass2026"},
+        )
+        assert r_chg.status_code == 200, f"{r_chg.status_code} {r_chg.text}"
+        # /auth/me must reflect the cleared flag
+        me = api_client.get(f"{BASE_URL}/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert me.status_code == 200
+        assert me.json().get("must_change_password") is False
+        # Now dashboard access should work
+        r_dash = api_client.get(
+            f"{BASE_URL}/api/dashboard/rep",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r_dash.status_code == 200, f"{r_dash.status_code} {r_dash.text}"
+
+    def test_skip_password_change_flag_works(self, api_client, admin_token):
+        email, user_obj = self._register_fresh(api_client, admin_token, skip=True)
+        assert user_obj.get("must_change_password") is False, (
+            "skip_password_change=True must yield must_change_password=False"
+        )
+        # Login + dashboard must work immediately, without change-password step.
+        token, u = self._login(api_client, email)
+        assert u.get("must_change_password") is False
+        r = api_client.get(
+            f"{BASE_URL}/api/dashboard/rep",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200, f"{r.status_code} {r.text}"

@@ -99,7 +99,7 @@ export default function AddLead() {
     }
     // Faza 2.1 — meeting_at wymagane dla statusu "umowione"
     if (status === "umowione" && !meetingAt) {
-      setErr("Dla statusu „Umówione" ustaw datę i godzinę spotkania.");
+      setErr('Dla statusu „Umówione" ustaw datę i godzinę spotkania.');
       return;
     }
     setBusy(true);
@@ -187,6 +187,19 @@ export default function AddLead() {
               );
             })}
           </View>
+
+          {status === "umowione" && (
+            <View style={styles.meetingBlock}>
+              <Text style={styles.sectionLabel}>Termin spotkania *</Text>
+              <DateTimeField
+                value={meetingAt}
+                onChange={setMeetingAt}
+                mode="datetime"
+                placeholder="Wybierz datę i godzinę"
+                testID="meeting-at-field"
+              />
+            </View>
+          )}
 
           <Field
             label="Notatka"

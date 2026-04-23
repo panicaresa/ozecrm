@@ -51,7 +51,7 @@ export function useRepLocationsWS(enabled: boolean = true): {
         setStatus((s) => ({ ...s, error: "Missing EXPO_PUBLIC_BACKEND_URL" }));
         return;
       }
-      const token = await SecureStore.getItemAsync("auth_token");
+      const token = await SecureStore.getItemAsync("oze_token");
       if (!token) {
         setStatus((s) => ({ ...s, error: "No auth token" }));
         return;

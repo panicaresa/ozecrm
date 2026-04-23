@@ -45,6 +45,25 @@ api.interceptors.request.use(async (config) => {
   return config;
 });
 
+// Batch B-fix #3E: surface 403 "Password change required" responses so that
+// calling screens can redirect to the force-change flow. Full redirect wiring
+// will be done in Batch C — for now we just log and propagate the error.
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    if (
+      error?.response?.status === 403 &&
+      error?.response?.data?.detail === "Password change required"
+    ) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "Password change required — user should be redirected to /login (force-change flow)"
+      );
+    }
+    return Promise.reject(error);
+  }
+);
+
 export async function saveToken(token: string) {
   if (isWeb) webStorage.setItem(TOKEN_KEY, token);
   else await SecureStore.setItemAsync(TOKEN_KEY, token);

@@ -9,6 +9,7 @@ export interface User {
   role: Role;
   avatar_url?: string | null;
   manager_id?: string | null;
+  must_change_password?: boolean;
   created_at?: string | null;
 }
 

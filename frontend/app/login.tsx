@@ -11,12 +11,12 @@ import {
 import { useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useAuth } from "../src/lib/auth";
+import { useAuth, User } from "../src/lib/auth";
 import { colors, spacing, radius } from "../src/theme";
 import { Button } from "../src/components/Button";
 import { Field } from "../src/components/Field";
 import { BrandLogo } from "../src/components/BrandLogo";
-import { formatApiError } from "../src/lib/api";
+import { api, formatApiError } from "../src/lib/api";
 
 const QUICK_ACCOUNTS: { label: string; email: string; color: string }[] = [
   { label: "Admin", email: "admin@test.com", color: colors.inverted },
@@ -26,11 +26,24 @@ const QUICK_ACCOUNTS: { label: string; email: string; color: string }[] = [
 
 export default function Login() {
   const router = useRouter();
-  const { login } = useAuth();
+  const { login, refresh } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Batch B-fix #3D: inline force-change-password flow
+  const [pendingUser, setPendingUser] = useState<User | null>(null);
+  const [newPw, setNewPw] = useState("");
+  const [newPw2, setNewPw2] = useState("");
+  const [changing, setChanging] = useState(false);
+  const [changeError, setChangeError] = useState<string | null>(null);
+
+  const navigateByRole = (role: string) => {
+    if (role === "admin") router.replace("/(admin)");
+    else if (role === "manager") router.replace("/(manager)");
+    else router.replace("/(rep)");
+  };
 
   const handleLogin = async () => {
     setError(null);
@@ -41,9 +54,12 @@ export default function Login() {
     setLoading(true);
     try {
       const u = await login(email.trim().toLowerCase(), password);
-      if (u.role === "admin") router.replace("/(admin)");
-      else if (u.role === "manager") router.replace("/(manager)");
-      else router.replace("/(rep)");
+      if (u.must_change_password) {
+        // Do NOT navigate — show inline password-change form instead.
+        setPendingUser(u);
+      } else {
+        navigateByRole(u.role);
+      }
     } catch (e: any) {
       setError(formatApiError(e, "Nie udało się zalogować"));
     } finally {
@@ -51,10 +67,121 @@ export default function Login() {
     }
   };
 
+  const handleChangePassword = async () => {
+    setChangeError(null);
+    if (newPw.length < 12) {
+      setChangeError("Nowe hasło musi mieć co najmniej 12 znaków.");
+      return;
+    }
+    if (!/[a-zA-Z]/.test(newPw) || !/[0-9]/.test(newPw)) {
+      setChangeError("Hasło musi zawierać co najmniej 1 literę i 1 cyfrę.");
+      return;
+    }
+    if (newPw !== newPw2) {
+      setChangeError("Hasła nie są identyczne.");
+      return;
+    }
+    setChanging(true);
+    try {
+      await api.post("/auth/change-password", {
+        current_password: password,
+        new_password: newPw,
+      });
+      // Reload user from /auth/me so AuthContext gets the fresh flag = False
+      await refresh();
+      const role = pendingUser?.role || "handlowiec";
+      setPendingUser(null);
+      setNewPw("");
+      setNewPw2("");
+      setPassword("");
+      navigateByRole(role);
+    } catch (e: any) {
+      setChangeError(formatApiError(e, "Nie udało się zmienić hasła"));
+    } finally {
+      setChanging(false);
+    }
+  };
+
   const quickFill = (em: string) => {
     setEmail(em);
     setPassword("test1234");
   };
+
+  // ─── Inline force-change form ─────────────────────────────────────────────
+  if (pendingUser) {
+    return (
+      <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
+          <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+            <View style={styles.brandWrap}>
+              <View style={styles.logoCard}>
+                <BrandLogo height={46} testID="login-brand-logo" />
+              </View>
+              <Text style={styles.tagline}>CRM · Centrum Dowodzenia D2D</Text>
+            </View>
+
+            <View style={styles.card}>
+              <View style={styles.okRow} testID="force-change-ok-row">
+                <Feather name="check-circle" size={16} color={colors.success} />
+                <Text style={styles.okText}>Zalogowano jako {pendingUser.email}</Text>
+              </View>
+              <View style={styles.warnBox}>
+                <Feather name="alert-triangle" size={16} color={colors.error} />
+                <Text style={styles.warnText}>Musisz zmienić hasło przed kontynuacją.</Text>
+              </View>
+
+              <Field
+                label="Nowe hasło"
+                placeholder="min. 12 znaków, litera + cyfra"
+                secureTextEntry
+                value={newPw}
+                onChangeText={setNewPw}
+                testID="force-change-new-password"
+              />
+              <Field
+                label="Powtórz nowe hasło"
+                placeholder="••••••••••••"
+                secureTextEntry
+                value={newPw2}
+                onChangeText={setNewPw2}
+                testID="force-change-confirm-password"
+              />
+
+              {!!changeError && (
+                <View style={styles.errBox} testID="force-change-error">
+                  <Feather name="alert-triangle" size={14} color={colors.error} />
+                  <Text style={styles.errText}>{changeError}</Text>
+                </View>
+              )}
+
+              <Button
+                title="Zmień hasło"
+                onPress={handleChangePassword}
+                loading={changing}
+                testID="force-change-submit-button"
+                icon={<Feather name="key" size={18} color="#fff" />}
+              />
+
+              <TouchableOpacity
+                onPress={() => {
+                  setPendingUser(null);
+                  setNewPw("");
+                  setNewPw2("");
+                  setChangeError(null);
+                }}
+                style={{ marginTop: spacing.md, alignSelf: "center" }}
+                testID="force-change-cancel"
+              >
+                <Text style={styles.cancelLink}>Anuluj i wyloguj się</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.footer}>© 2026 Grupa OZE · wersja MVP</Text>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
@@ -143,4 +270,9 @@ const styles = StyleSheet.create({
   errBox: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#fef2f2", padding: 10, borderRadius: radius.md, marginBottom: spacing.md },
   errText: { color: colors.error, fontSize: 13, flex: 1 },
   footer: { textAlign: "center", fontSize: 11, color: colors.textSecondary, marginTop: spacing.lg },
+  okRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10 },
+  okText: { color: colors.success, fontSize: 13, fontWeight: "700" },
+  warnBox: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#fef3c7", padding: 12, borderRadius: radius.md, marginBottom: spacing.md },
+  warnText: { color: colors.error, fontSize: 13, fontWeight: "700", flex: 1 },
+  cancelLink: { color: colors.textSecondary, fontSize: 12, textDecorationLine: "underline" },
 });

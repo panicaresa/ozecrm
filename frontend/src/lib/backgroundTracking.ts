@@ -26,7 +26,7 @@ TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
   const { locations } = data as { locations: Location.LocationObject[] };
   if (!locations || locations.length === 0) return;
 
-  const token = await SecureStore.getItemAsync("auth_token");
+  const token = await SecureStore.getItemAsync("oze_token");
   if (!token) return;
 
   const backend = getBackendUrl();

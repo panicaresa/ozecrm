@@ -23,6 +23,7 @@ import { colors, radius, spacing, statusColor, statusLabel } from "../theme";
 import { Field } from "./Field";
 import { Button } from "./Button";
 import { Lead } from "./LeadCard";
+import { DateTimeField } from "./DateTimeField";
 
 const STATUSES = ["nowy", "umowione", "decyzja", "podpisana", "nie_zainteresowany"];
 
@@ -390,22 +391,22 @@ export const LeadDetailScreen: React.FC<{ leadId: string; backLabel?: string }> 
               ) : (
                 <Text style={styles.meetingMissing}>⏰ Brak daty — ustaw termin spotkania poniżej</Text>
               )}
-              <Text style={styles.hintSmall}>Format: YYYY-MM-DDTHH:mm (np. 2026-04-25T14:30)</Text>
+              <Text style={styles.hintSmall}>Wybierz datę i godzinę w kalendarzu poniżej.</Text>
               <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
-                <TouchableOpacity
-                  style={[styles.input, { flex: 1, justifyContent: "center" }]}
-                  onPress={() => {}}
-                  activeOpacity={1}
-                >
-                  <TextInput
-                    value={meetingAt}
-                    onChangeText={setMeetingAt}
-                    placeholder="2026-04-25T14:30"
-                    placeholderTextColor={colors.textSecondary}
-                    style={{ color: colors.textPrimary, fontWeight: "700", fontSize: 14 }}
+                <View style={{ flex: 1 }}>
+                  <DateTimeField
+                    value={(() => {
+                      if (!meetingAt || meetingAt.length < 10) return null;
+                      const s = meetingAt.includes("T") ? meetingAt : `${meetingAt}T09:00`;
+                      const d = new Date(s);
+                      return isNaN(d.getTime()) ? null : d;
+                    })()}
+                    onChange={(d) => setMeetingAt(d ? d.toISOString().slice(0, 16) : "")}
+                    mode="datetime"
+                    placeholder="Wybierz datę i godzinę"
                     testID="meeting-input"
                   />
-                </TouchableOpacity>
+                </View>
                 <TouchableOpacity
                   style={styles.meetingSave}
                   onPress={saveMeeting}

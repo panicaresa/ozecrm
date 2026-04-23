@@ -172,6 +172,7 @@ class RegisterIn(BaseModel):
     name: str
     role: str
     manager_id: Optional[str] = None
+    skip_password_change: Optional[bool] = False  # admin-only escape hatch for service accounts
 
 
 class UserUpdate(BaseModel):
@@ -336,6 +337,9 @@ async def register(body: RegisterIn, admin: Dict[str, Any] = Depends(require_rol
     existing = await db.users.find_one({"email": email})
     if existing:
         raise HTTPException(status_code=400, detail="Użytkownik o takim e-mailu już istnieje")
+    # Batch B-fix #3A: default — wymuś zmianę hasła przy pierwszym logowaniu.
+    # Admin może świadomie pominąć tylko z explicit skip_password_change=True (service accounts).
+    must_change = not (body.skip_password_change is True)
     user_doc = {
         "id": str(uuid.uuid4()),
         "email": email,
@@ -344,6 +348,7 @@ async def register(body: RegisterIn, admin: Dict[str, Any] = Depends(require_rol
         "role": body.role,
         "manager_id": body.manager_id,
         "avatar_url": None,
+        "must_change_password": must_change,
         "created_at": now(),
     }
     await db.users.insert_one(user_doc)
@@ -1907,10 +1912,16 @@ async def seed_data():
                     "role": role,
                     "manager_id": manager_id,
                     "avatar_url": avatar,
+                    # Batch B-fix #3C: demo users NEVER carry a force-change flag
+                    # — they are disposable dev credentials, not production accounts.
+                    "must_change_password": False,
                     "created_at": now(),
                 }
             )
             return uid
+        # Ensure flag is explicitly False for existing demo users (idempotent).
+        if existing.get("must_change_password") is True:
+            await db.users.update_one({"email": email}, {"$set": {"must_change_password": False}})
         if not verify_password(pw, existing["password_hash"]):
             await db.users.update_one(
                 {"email": email},
