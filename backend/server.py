@@ -11,8 +11,9 @@ import secrets as _secrets
 import logging
 import bcrypt
 import jwt
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date, time
 from typing import List, Optional, Dict, Any
+from collections import defaultdict
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, WebSocket, WebSocketDisconnect
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -1577,6 +1578,313 @@ async def _contract_scope_query(user: Dict[str, Any]) -> Dict[str, Any]:
         rep_ids = [r["id"] for r in reps] + [user["id"]]
         return {"$or": [{"rep_id": {"$in": rep_ids}}, {"owner_manager_id": user["id"]}]}
     return {"rep_id": user["id"]}
+
+
+async def _compute_daily_report(
+    user: Dict[str, Any], period: str = "today"
+) -> Dict[str, Any]:
+    """Sprint 3.5 — aggregate signed contracts + meetings + team activity
+    for manager (team scope) or admin (firm scope). Always computed live.
+    """
+    period = period if period in ("today", "yesterday") else "today"
+    now_utc = now()
+    today_date = now_utc.date()
+    target_date = today_date if period == "today" else (today_date - timedelta(days=1))
+    start_dt = datetime.combine(target_date, time(0, 0), tzinfo=timezone.utc)
+    end_dt = datetime.combine(target_date, time(23, 59, 59), tzinfo=timezone.utc)
+
+    # ── Scope resolution (RBAC) ─────────────────────────────────────────────
+    settings_doc = await db.settings.find_one({"id": "global"}, {"_id": 0}) or {}
+    if user["role"] == "admin":
+        scope = "firm"
+        scope_name = settings_doc.get("company_name") or "Grupa OZE"
+        team_reps = await db.users.find(
+            {"role": "handlowiec"}, {"id": 1, "name": 1, "email": 1, "manager_id": 1}
+        ).to_list(1000)
+    elif user["role"] == "manager":
+        scope = "team"
+        scope_name = f"Zespół {user.get('name') or user['email']}"
+        team_reps = await db.users.find(
+            {"role": "handlowiec", "manager_id": user["id"]},
+            {"id": 1, "name": 1, "email": 1, "manager_id": 1},
+        ).to_list(1000)
+    else:
+        raise HTTPException(
+            status_code=403, detail="Daily report available for manager/admin only"
+        )
+
+    rep_ids = [r["id"] for r in team_reps]
+    rep_name_by_id = {r["id"]: (r.get("name") or r.get("email")) for r in team_reps}
+
+    # ── Contract filters ────────────────────────────────────────────────────
+    def _contract_filter(s, e):
+        base = {"signed_at": {"$gte": s, "$lte": e}}
+        if scope == "team":
+            base["rep_id"] = {"$in": rep_ids}
+        return base
+
+    contracts_period = await db.contracts.find(_contract_filter(start_dt, end_dt)).to_list(2000)
+    signed = [c for c in contracts_period if not c.get("cancelled")]
+    cancelled = [c for c in contracts_period if c.get("cancelled")]
+    negative = [
+        c for c in signed if (c.get("computed_margin") is not None and c["computed_margin"] < 0)
+    ]
+
+    total_gross = round(sum(float(c.get("gross_amount") or 0) for c in signed), 2)
+    total_margin = round(sum(float(c.get("global_margin") or 0) for c in signed), 2)
+    total_commission = round(sum(float(c.get("commission_amount") or 0) for c in signed), 2)
+    avg_gross = round(total_gross / len(signed), 2) if signed else 0.0
+
+    # ── Comparison window: yesterday + week avg ─────────────────────────────
+    y_start = start_dt - timedelta(days=1)
+    y_end = end_dt - timedelta(days=1)
+    y_contracts = await db.contracts.find(_contract_filter(y_start, y_end)).to_list(2000)
+    y_signed = [c for c in y_contracts if not c.get("cancelled")]
+    y_margin = round(sum(float(c.get("global_margin") or 0) for c in y_signed), 2)
+
+    week_start = start_dt - timedelta(days=7)
+    week_contracts = await db.contracts.find(_contract_filter(week_start, end_dt)).to_list(5000)
+    week_signed = [c for c in week_contracts if not c.get("cancelled")]
+    week_avg_contracts = round(len(week_signed) / 7.0, 2)
+    week_avg_margin = round(
+        sum(float(c.get("global_margin") or 0) for c in week_signed) / 7.0, 2
+    )
+
+    # ── Blok B: pipeline ────────────────────────────────────────────────────
+    if period == "today":
+        meet_start = datetime.combine(
+            target_date + timedelta(days=1), time(0, 0), tzinfo=timezone.utc
+        )
+    else:
+        meet_start = start_dt
+    meet_end = meet_start + timedelta(days=1)
+    meeting_filter: Dict[str, Any] = {"status": "umowione"}
+    if scope == "team":
+        meeting_filter["assigned_to"] = {"$in": rep_ids}
+    meetings_all = await db.leads.find(meeting_filter).to_list(2000)
+    meetings_period = []
+    for lead in meetings_all:
+        mt = _parse_iso_dt(lead.get("meeting_at"))
+        if mt and meet_start <= mt < meet_end:
+            meetings_period.append(
+                {
+                    "lead_id": lead.get("id"),
+                    "client_name": lead.get("client_name"),
+                    "meeting_at": iso(mt),
+                    "rep_name": rep_name_by_id.get(lead.get("assigned_to")) or "—",
+                }
+            )
+    meetings_period.sort(key=lambda m: m.get("meeting_at") or "")
+
+    hot_filter: Dict[str, Any] = {"status": "decyzja"}
+    if scope == "team":
+        hot_filter["assigned_to"] = {"$in": rep_ids}
+    hot_list = await db.leads.find(
+        hot_filter, {"_id": 0, "id": 1, "client_name": 1, "assigned_to": 1}
+    ).to_list(500)
+
+    new_leads_filter: Dict[str, Any] = {"created_at": {"$gte": start_dt, "$lte": end_dt}}
+    if scope == "team":
+        new_leads_filter["assigned_to"] = {"$in": rep_ids}
+    new_leads = await db.leads.find(new_leads_filter).to_list(500)
+    new_leads_by_rep: Dict[str, int] = defaultdict(int)
+    for l in new_leads:
+        new_leads_by_rep[l.get("assigned_to") or "—"] += 1
+
+    # ── Blok C: team aggregates ─────────────────────────────────────────────
+    margin_by_rep: Dict[str, float] = defaultdict(float)
+    count_by_rep: Dict[str, int] = defaultdict(int)
+    for c in signed:
+        rid = c.get("rep_id") or "—"
+        margin_by_rep[rid] += float(c.get("global_margin") or 0)
+        count_by_rep[rid] += 1
+
+    sorted_reps = sorted(margin_by_rep.items(), key=lambda x: -x[1])
+    medals = ["🥇", "🥈", "🥉"]
+    top3 = []
+    for idx, (rid, margin) in enumerate(sorted_reps[:3]):
+        top3.append(
+            {
+                "rep_id": rid,
+                "rep_name": rep_name_by_id.get(rid) or "—",
+                "margin_today": round(margin, 2),
+                "contracts_today": count_by_rep[rid],
+                "medal": medals[idx],
+            }
+        )
+    top_rep = top3[0] if top3 else None
+
+    # Active = created a lead or updated something in last 3 days
+    activity_threshold = now_utc - timedelta(days=3)
+    active_rep_ids = set()
+    active_cursor = db.leads.find(
+        {
+            "$or": [
+                {"created_at": {"$gte": activity_threshold}},
+                {"updated_at": {"$gte": activity_threshold}},
+            ],
+            "assigned_to": {"$in": rep_ids},
+        },
+        {"_id": 0, "assigned_to": 1},
+    )
+    async for l in active_cursor:
+        if l.get("assigned_to"):
+            active_rep_ids.add(l["assigned_to"])
+    inactive_list = []
+    for rid in rep_ids:
+        if rid in active_rep_ids:
+            continue
+        last_lead = await db.leads.find_one(
+            {"assigned_to": rid}, sort=[("created_at", -1)], projection={"_id": 0, "created_at": 1}
+        )
+        if last_lead and last_lead.get("created_at"):
+            delta = now_utc - _parse_iso_dt(last_lead["created_at"])
+            days_ago = max(3, delta.days if delta else 3)
+        else:
+            days_ago = 999
+        inactive_list.append(
+            {
+                "rep_id": rid,
+                "rep_name": rep_name_by_id.get(rid) or "—",
+                "last_active_days_ago": days_ago,
+            }
+        )
+
+    # ── Per-manager breakdown (firm scope only) ─────────────────────────────
+    per_manager = None
+    if scope == "firm":
+        managers = await db.users.find(
+            {"role": "manager"}, {"id": 1, "name": 1, "email": 1}
+        ).to_list(200)
+        per_manager = []
+        rep_by_mgr: Dict[str, List[str]] = defaultdict(list)
+        for r in team_reps:
+            if r.get("manager_id"):
+                rep_by_mgr[r["manager_id"]].append(r["id"])
+        for m in managers:
+            m_rep_ids = rep_by_mgr.get(m["id"], [])
+            m_contracts = [c for c in signed if c.get("rep_id") in m_rep_ids]
+            per_manager.append(
+                {
+                    "manager_id": m["id"],
+                    "manager_name": m.get("name") or m.get("email"),
+                    "reps_count": len(m_rep_ids),
+                    "contracts_today": len(m_contracts),
+                    "margin_today": round(
+                        sum(float(c.get("global_margin") or 0) for c in m_contracts), 2
+                    ),
+                    "active_reps": len([rid for rid in m_rep_ids if rid in active_rep_ids]),
+                    "inactive_reps": len([rid for rid in m_rep_ids if rid not in active_rep_ids]),
+                }
+            )
+        per_manager.sort(key=lambda x: -(x.get("margin_today") or 0))
+
+    # ── Alerts ──────────────────────────────────────────────────────────────
+    alerts: List[Dict[str, Any]] = []
+    for entry in inactive_list:
+        if entry["last_active_days_ago"] >= 3:
+            alerts.append(
+                {
+                    "severity": "warning",
+                    "type": "inactive_rep",
+                    "message": f"{entry['rep_name']} nieaktywny {entry['last_active_days_ago']} dni",
+                    "meta": {"rep_id": entry["rep_id"], "days": entry["last_active_days_ago"]},
+                }
+            )
+    for c in negative:
+        alerts.append(
+            {
+                "severity": "critical",
+                "type": "negative_margin",
+                "message": (
+                    f"Umowa {c.get('client_name') or '—'} z marżą "
+                    f"{float(c.get('computed_margin') or 0):.0f} PLN (override {c.get('margin_override_by_role') or 'manager'})"
+                ),
+                "meta": {
+                    "contract_id": c.get("id"),
+                    "margin": c.get("computed_margin"),
+                    "override_by": c.get("margin_override_by_role"),
+                },
+            }
+        )
+
+    return {
+        "period": period,
+        "period_date": target_date.isoformat(),
+        "generated_at": iso(now_utc),
+        "scope": scope,
+        "scope_name": scope_name,
+        "contracts_signed": {
+            "count": len(signed),
+            "total_gross": total_gross,
+            "total_margin": total_margin,
+            "total_commission": total_commission,
+            "avg_gross": avg_gross,
+        },
+        "contracts_cancelled": {
+            "count": len(cancelled),
+            "total_gross_lost": round(sum(float(c.get("gross_amount") or 0) for c in cancelled), 2),
+            "list": [
+                {
+                    "contract_id": c.get("id"),
+                    "client_name": c.get("client_name"),
+                    "cancelled_at": iso(c.get("cancelled_at") or c.get("updated_at")),
+                }
+                for c in cancelled[:10]
+            ],
+        },
+        "negative_margin_contracts": [
+            {
+                "contract_id": c.get("id"),
+                "client_name": c.get("client_name"),
+                "margin": c.get("computed_margin"),
+                "override_by": c.get("margin_override_by_role"),
+            }
+            for c in negative
+        ],
+        "comparison": {
+            "yesterday": {"contracts": len(y_signed), "margin": y_margin},
+            "week_avg": {"contracts": week_avg_contracts, "margin": week_avg_margin},
+        },
+        "meetings_tomorrow": {"count": len(meetings_period), "list": meetings_period[:8]},
+        "hot_leads": {
+            "count": len(hot_list),
+            "list": [
+                {
+                    "lead_id": l.get("id"),
+                    "client_name": l.get("client_name"),
+                    "rep_name": rep_name_by_id.get(l.get("assigned_to")) or "—",
+                }
+                for l in hot_list[:5]
+            ],
+        },
+        "new_leads_added": {
+            "count": len(new_leads),
+            "by_rep": [
+                {"rep_name": rep_name_by_id.get(rid) or "—", "count": cnt}
+                for rid, cnt in sorted(new_leads_by_rep.items(), key=lambda x: -x[1])
+            ],
+        },
+        "top_rep": top_rep,
+        "top3_reps": top3,
+        "team_activity": {
+            "total_reps": len(rep_ids),
+            "active_reps": len([rid for rid in rep_ids if rid in active_rep_ids]),
+            "inactive_reps": len(inactive_list),
+            "inactive_list": [
+                entry for entry in inactive_list if entry["last_active_days_ago"] >= 3
+            ],
+        },
+        "per_manager_breakdown": per_manager,
+        "alerts": alerts,
+    }
+
+
+@api.get("/reports/daily")
+async def get_daily_report(
+    period: str = "today", user: Dict[str, Any] = Depends(get_current_user)
+):
+    return await _compute_daily_report(user, period)
 
 
 @api.post("/contracts/preview-cost")
