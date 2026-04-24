@@ -22,6 +22,7 @@ import { LeadMap } from "../../src/components/LeadMap";
 import { BrandLogo } from "../../src/components/BrandLogo";
 import { QueueBadge } from "../../src/components/QueueBadge";
 import { CommissionCalculator } from "../../src/components/CommissionCalculator";
+import { DailyReportWidget } from "../../src/components/DailyReportWidget";
 import { useRepLocationsWS } from "../../src/lib/useRepLocationsWS";
 import { Lead } from "../../src/components/LeadCard";
 
@@ -250,6 +251,11 @@ export default function ManagerDashboard() {
         {/* Szybki kalkulator prowizji */}
         <View style={{ marginHorizontal: spacing.md, marginTop: spacing.md }}>
           <CommissionCalculator testID="manager-commission-calculator" />
+        </View>
+
+        {/* Sprint 3.5 — Daily Report (collapsed by default) */}
+        <View style={{ marginHorizontal: spacing.md, marginTop: spacing.md }}>
+          <DailyReportWidget testID="manager-daily-report" />
         </View>
 
         {/* Faza 2.1 — Search bar + rep filter chips */}

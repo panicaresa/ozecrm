@@ -639,11 +639,92 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Faza 2.0 GET /api/tracking/track/{rep_id} role-scoped"
+    - "Sprint 3.5 — DailyReportWidget integrated on Manager + Admin dashboards"
   stuck_tasks:
     - "Faza 2.0 GET /api/tracking/track/{rep_id} role-scoped"
   test_all: false
   test_priority: "high_first"
+
+# --- Sprint 3.5: Daily Report Widget (2026-04-24) ---
+frontend_sprint35:
+  - task: "Sprint 3.5 — DailyReportWidget component (collapsed by default)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/DailyReportWidget.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          New file: /app/frontend/src/components/DailyReportWidget.tsx.
+          Fetches GET /api/reports/daily?period=today|yesterday.
+          States:
+            - Collapsed by default: single header row with icon + "Raport dzienny"
+              + period date + alert pill (count) + chevron-down; mini-metrics row
+              shows 3 key figures (Umowy count / Marża łączna / Lider top-rep).
+            - Expanded (on tap): period toggle (Dziś / Wczoraj), manual refresh
+              button with last-refreshed HH:MM, and 3 colored blocks:
+                • Block A "Pieniądze" — contracts count, total_margin (green),
+                  total_gross, commission, avg_gross, vs Wczoraj delta with
+                  arrow, vs Śr. 7 dni %-change, micro-alerts for cancelled /
+                  negative-margin contracts
+                • Block B "Pipeline" — meetings_tomorrow, hot_leads (decyzja),
+                  new_leads_added with per-rep chips; lists up to 3 entries
+                  with "+N więcej" overflow
+                • Block C "Zespół" — total/active/inactive counters, Top 3 reps
+                  with medal, inactive >3d chips in red
+            - Admin-only extra block "Managerowie" (per_manager_breakdown) —
+              renders only if the API returns that key.
+            - Alerts block at the bottom, grouped criticals first then warnings.
+          Silent auto-refresh every 60s (configurable via prop refreshIntervalMs).
+          Graceful loading + error + null-data states; keeps design-system
+          tokens from /app/frontend/src/theme.ts (colors/radius/spacing).
+          No shadows — uses paper + border to match Manager Dashboard and
+          FinanceScreen.
+
+  - task: "Sprint 3.5 — Integration into Manager dashboard"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(manager)/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Imported DailyReportWidget and inserted directly after the
+          CommissionCalculator section. testID="manager-daily-report".
+          Screenshot verified on web viewport:
+            - Collapsed header + mini metrics render correctly.
+            - Tapping header expands to 3 blocks (Pieniądze / Pipeline /
+              Zespół) and the Alerts block. Per-manager block is hidden
+              (correct — manager scope).
+            - Period toggle (Dziś/Wczoraj) switches data (yesterday shows
+              0 umów / 0,00 zł for empty day as expected).
+
+  - task: "Sprint 3.5 — Integration into Admin dashboard"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(admin)/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Imported DailyReportWidget and inserted directly after the
+          CommissionCalculator on the admin home. testID="admin-daily-report".
+          Screenshot verified on web viewport:
+            - Scope name is the firm name (from settings.company_name).
+            - Contracts/margin/commission aggregates computed firm-wide.
+            - Per-manager breakdown section ("Managerowie") renders with
+              reps_count / active_reps / contracts_today / margin_today.
+            - Alerts count badge reflects firm-wide inactive reps + any
+              negative-margin contracts.
 
 # --- Mini-sprint + Phase 2.0 testing results (appended 2026-04-22) ---
 # See agent_communication below for full report.

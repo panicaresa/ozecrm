@@ -8,6 +8,7 @@ import { useAuth } from "../../src/lib/auth";
 import { BrandLogo } from "../../src/components/BrandLogo";
 import { QueueBadge } from "../../src/components/QueueBadge";
 import { CommissionCalculator } from "../../src/components/CommissionCalculator";
+import { DailyReportWidget } from "../../src/components/DailyReportWidget";
 
 export default function AdminHome() {
   const router = useRouter();
@@ -46,6 +47,7 @@ export default function AdminHome() {
 
       <ScrollView contentContainerStyle={{ padding: spacing.md, gap: 12 }}>
         <CommissionCalculator testID="admin-commission-calculator" />
+        <DailyReportWidget testID="admin-daily-report" />
         {tiles.map((t) => (
           <TouchableOpacity
             key={t.title}
