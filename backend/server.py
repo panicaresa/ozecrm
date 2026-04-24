@@ -1799,7 +1799,10 @@ async def _compute_daily_report(
     # ── Alerts ──────────────────────────────────────────────────────────────
     alerts: List[Dict[str, Any]] = []
     for entry in inactive_list:
-        if entry["last_active_days_ago"] >= 3:
+        # Sprint 3.5c micro-fix: skip "never worked" reps (999) — they are NEW
+        # employees, not neglected. Raising an alert for them would mislead
+        # managers into thinking someone is slacking.
+        if entry["last_active_days_ago"] >= 3 and entry["last_active_days_ago"] < 999:
             alerts.append(
                 {
                     "severity": "warning",

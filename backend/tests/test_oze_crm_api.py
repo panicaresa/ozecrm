@@ -2392,3 +2392,70 @@ class TestDailyReport:
         for r2 in d["top3_reps"]:
             assert "rep_id" in r2 and "rep_name" in r2 and "medal" in r2
 
+    # ────────────────────────────────────────────────────────────────────────
+    # Sprint 3.5c micro: skip "never worked" reps (999d) from inactive alerts
+    # ────────────────────────────────────────────────────────────────────────
+    def test_daily_report_skips_999_days_alerts(
+        self, api_client, manager_token
+    ):
+        """Create a brand-new handlowiec with zero activity (never added a lead).
+        Ensure they still appear in team_activity.inactive_list (for head-count
+        purposes) but do NOT fire an `inactive_rep` warning alert — otherwise
+        managers get false 'Jan nieaktywny 999 dni' noise for brand-new hires.
+        """
+        import uuid as _u
+        import pymongo
+        from datetime import datetime, timezone
+
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        manager = mc["oze_crm"]["users"].find_one({"email": "manager@test.com"})
+        assert manager is not None, "manager@test.com seed missing"
+
+        # Insert a handlowiec directly with zero activity (no leads, no
+        # last_active_at). _compute_daily_report will flag them as 999d.
+        new_id = str(_u.uuid4())
+        new_email = f"neverworked_{_u.uuid4().hex[:8]}@test.com"
+        mc["oze_crm"]["users"].insert_one(
+            {
+                "id": new_id,
+                "email": new_email,
+                "name": f"Never Worked {_u.uuid4().hex[:4]}",
+                "role": "handlowiec",
+                "manager_id": manager["id"],
+                "password_hash": "dummy",
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+
+        try:
+            r = api_client.get(
+                f"{BASE_URL}/api/reports/daily",
+                headers={"Authorization": f"Bearer {manager_token}"},
+            )
+            assert r.status_code == 200, r.text
+            d = r.json()
+
+            # Must appear in the inactive_list (head-count visibility)
+            inactive_ids = {row["rep_id"] for row in d["team_activity"]["inactive_list"]}
+            assert new_id in inactive_ids, (
+                "New rep should show up in inactive_list for head-count"
+            )
+
+            # But MUST NOT emit an inactive_rep alert for them
+            for a in d["alerts"]:
+                if a["type"] == "inactive_rep" and a["meta"].get("rep_id") == new_id:
+                    raise AssertionError(
+                        f"Never-worked rep should NOT trigger inactive_rep alert (got {a})"
+                    )
+
+            # Belt-and-braces: no inactive_rep alert should have days >= 999
+            for a in d["alerts"]:
+                if a["type"] == "inactive_rep":
+                    assert a["meta"]["days"] < 999, (
+                        f"999+ days should be filtered out (got {a})"
+                    )
+        finally:
+            mc["oze_crm"]["users"].delete_one({"id": new_id})
+            mc.close()
+

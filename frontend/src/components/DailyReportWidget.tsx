@@ -235,10 +235,12 @@ export function DailyReportWidget({
   );
   const repProfileHref = useCallback(
     (repId: string): string => {
-      // Both manager and admin use the manager rep profile route today.
+      // Sprint 3.5c micro: admin now has its own rep profile route with
+      // breadcrumbs + manager info. Manager keeps the existing route.
+      if (role === "admin") return `/(admin)/rep/${repId}`;
       return `/(manager)/rep/${repId}`;
     },
-    []
+    [role]
   );
   const managerLeadsWithFilter = useCallback(
     (repId: string) => ({

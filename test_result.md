@@ -639,11 +639,73 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Sprint 3.5b — CommissionCalculator aligned with Sprint 4.5 + DrillDownableSection pattern"
+    - "Sprint 3.5c micro — GestureHandlerRootView + 999d alert filter + admin rep profile"
   stuck_tasks:
     - "Faza 2.0 GET /api/tracking/track/{rep_id} role-scoped"
   test_all: false
   test_priority: "high_first"
+
+# --- Sprint 3.5c (micro-sprint) 2026-04-24 ---
+sprint_35c_micro:
+  - task: "Sprint 3.5c — GestureHandlerRootView wrapper (crash fix)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/_layout.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          User reported crash "PanGestureHandler must be used as a descendant
+          of GestureHandlerRootView" after tapping the "Jan: 1" chip in Daily
+          Report and navigating to Manager Leads.
+          Fix: wrapped the entire Stack in <GestureHandlerRootView style={{flex:1}}>
+          as the outermost provider (before SafeAreaProvider, AuthProvider).
+          Verified: handlowiec → Moje leady renders Swipeable list without crash;
+          admin → Daily Report drill-down modal (Swipeable) works normally.
+  - task: "Sprint 3.5c — Backend: skip 999-day inactive_rep alerts"
+    implemented: true
+    working: "NA"
+    file: "/app/backend/server.py + /app/backend/tests/test_oze_crm_api.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Never-worked reps (no leads ever, last_active_days_ago == 999) no
+          longer emit `inactive_rep` warning alerts — they are NEW hires, not
+          neglected. They still show up in team_activity.inactive_list for
+          head-count visibility. Added test_daily_report_skips_999_days_alerts
+          that inserts a fresh handlowiec directly in Mongo, verifies they
+          are in inactive_list but NOT in alerts. 74/74 pass + 1 skipped.
+  - task: "Sprint 3.5c — Admin rep profile route + shared RepProfileScreen"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/RepProfileScreen.tsx + /app/frontend/app/(admin)/rep/[id].tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Refactored: moved the 389-line body of (manager)/rep/[id].tsx into
+          a shared /src/components/RepProfileScreen.tsx with a scope prop
+          ("admin" | "manager"). Both route files are now 5-line wrappers.
+          Admin scope adds:
+            - breadcrumb "CAŁA FIRMA · MANAGER: <name>" above the title
+            - ADMIN badge (shield icon) in the top-right of the header
+            - a tap-able "Manager" info card above the hero card (drills
+              deeper into that manager's own profile)
+          Updated DailyReportWidget.repProfileHref → admin routes to
+          /(admin)/rep/<id>, manager keeps /(manager)/rep/<id>.
+          Manually verified: admin → Daily Report → inactive-chip tap →
+          /rep/<id> opens with breadcrumb, Admin badge, and manager card.
+          Manager → same tap → unchanged behaviour.
 
 # --- Sprint 3.5b: DrillDownable pattern + Calc fix (2026-04-24) ---
 sprint_35b:
