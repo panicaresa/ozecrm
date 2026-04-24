@@ -2346,3 +2346,49 @@ class TestDailyReport:
         mc["oze_crm"]["contracts"].delete_many({"client_name": {"$regex": "^DailyNeg_"}})
         mc.close()
 
+    # ────────────────────────────────────────────────────────────────────────
+    # Sprint 3.5b: drill-down data enrichment
+    # ────────────────────────────────────────────────────────────────────────
+    def test_daily_report_includes_drill_down_data(self, api_client, manager_token):
+        """Sprint 3.5b: ensure /reports/daily returns the extra fields required
+        by the frontend drill-downs (rep_id for navigation, leads list per rep,
+        inactive_list with rep_id, etc.)."""
+        r = api_client.get(
+            f"{BASE_URL}/api/reports/daily",
+            headers={"Authorization": f"Bearer {manager_token}"},
+        )
+        assert r.status_code == 200, r.text
+        d = r.json()
+
+        # meetings_tomorrow.list entries
+        for m in d["meetings_tomorrow"]["list"]:
+            assert "lead_id" in m and "client_name" in m
+            assert "meeting_at" in m and "rep_name" in m
+            # rep_id may be None for unassigned but key must exist
+            assert "rep_id" in m
+
+        # hot_leads.list entries
+        for l in d["hot_leads"]["list"]:
+            assert "lead_id" in l and "client_name" in l
+            assert "rep_name" in l and "rep_id" in l
+            # Optional enrichment (safe if missing, but our server returns them)
+            assert "phone" in l and "address" in l
+
+        # new_leads_added.by_rep — now a list of {rep_id, rep_name, count, leads}
+        assert isinstance(d["new_leads_added"]["by_rep"], list)
+        for entry in d["new_leads_added"]["by_rep"]:
+            assert "rep_id" in entry and "rep_name" in entry
+            assert "count" in entry and isinstance(entry["count"], int)
+            assert "leads" in entry and isinstance(entry["leads"], list)
+            for lead in entry["leads"]:
+                assert "id" in lead and "client_name" in lead
+
+        # team_activity.inactive_list entries
+        for r2 in d["team_activity"]["inactive_list"]:
+            assert "rep_id" in r2 and "rep_name" in r2
+            assert "last_active_days_ago" in r2
+
+        # top3_reps entries (used for podium → drill into rep profile)
+        for r2 in d["top3_reps"]:
+            assert "rep_id" in r2 and "rep_name" in r2 and "medal" in r2
+

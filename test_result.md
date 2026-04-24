@@ -639,11 +639,155 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Sprint 3.5 — DailyReportWidget integrated on Manager + Admin dashboards"
+    - "Sprint 3.5b — CommissionCalculator aligned with Sprint 4.5 + DrillDownableSection pattern"
   stuck_tasks:
     - "Faza 2.0 GET /api/tracking/track/{rep_id} role-scoped"
   test_all: false
   test_priority: "high_first"
+
+# --- Sprint 3.5b: DrillDownable pattern + Calc fix (2026-04-24) ---
+sprint_35b:
+  - task: "Sprint 3.5b — CommissionCalculator: gross-price input aligned with Sprint 4.5"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/CommissionCalculator.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          BREAKING change in input model. Previously user typed "marża" and
+          system derived "totalNetto = baseNetto + marża" which diverged from
+          POST /contracts (Sprint 4.5) formula.
+          NOW: user enters `area (m²)` + `gross price (PLN netto)`. The widget
+          computes `firm_cost = area * base_price_tier` and `margin = gross − firm_cost`
+          — identical logic to backend _compute_cost_and_margin.
+          New "SUGEROWANA" button fills gross = koszt * 1.3 as a starting point.
+          Removed: marginOverride / marginTouched / resetMargin state.
+          Added: red warning block when margin is negative ("Umowa zablokowana
+          dla handlowca; manager/admin może nadpisać").
+          Commission = commission_percent × max(0, margin). If margin ≤ 0,
+          commission = 0 (matches backend).
+  - task: "Sprint 3.5b — Remove margin_per_m2 from admin settings UI"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(admin)/settings.tsx and /app/backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          - Removed the "Marża na m²" input from Admin Settings; replaced the
+            row layout with a single "Prowizja (% marży)" field plus a hint
+            explaining that margin is auto-computed from cost tiers (Sprint 4.5).
+          - Backend: marked SettingsIn.margin_per_m2 as DEPRECATED in a comment;
+            kept the field in the schema for backward compat with historical
+            reads and /api/dashboard/finance (no UI, no new data paths).
+  - task: "Sprint 3.5b — Backend: rep_id + leads drill-down enrichment in /reports/daily"
+    implemented: true
+    working: "NA"
+    file: "/app/backend/server.py + /app/backend/tests/test_oze_crm_api.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          - meetings_tomorrow.list items now include `rep_id`.
+          - hot_leads.list items now include `rep_id`, `phone`, `address`
+            (used for the drill-down modal full-row renderer).
+          - new_leads_added.by_rep changed from `{rep_name, count}` to
+            `[{rep_id, rep_name, count, leads: [{id, client_name, created_at}]}]`
+            so the frontend can either navigate with ?rep_id=... or render
+            per-rep lead detail in a modal.
+          - Added a new pytest `test_daily_report_includes_drill_down_data`
+            asserting these fields exist on every list entry.
+          - 73/73 tests pass + 1 skipped.
+  - task: "Sprint 3.5b — Generic DrillDownableSection<T> component"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/DrillDownableSection.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          New reusable pattern (third after FilterableList + useAppEventsWS).
+          - Generic `<T extends DrillDownItem>` with React.memo cast.
+          - Props: title, icon, iconColor, items, renderItemPreview,
+            renderItemFull (optional), onItemPress, maxInline (default 3),
+            emptyCopy, modalTitle, layout ("list" | "chips"), testID.
+          - Inline preview: up to maxInline items + "Pokaż wszystkie (N)"
+            primary button (or "+N" overflow chip for the chips layout).
+          - Tap on any row or chip → onItemPress(item) for navigation.
+          - Modal: bottom-sheet with backdrop (rgba 0.55), SafeAreaView,
+            slide animation on native / fade on web, scrollable list,
+            tap on item closes modal and then navigates.
+          - Close via X button (top-right), "Zamknij" button (bottom) or
+            Android hardware back (onRequestClose).
+          - Uses theme tokens only (colors/radius/spacing); zero hardcoded
+            colors.
+  - task: "Sprint 3.5b — Integrate drill-downs in DailyReportWidget"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/DailyReportWidget.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          - Imported useRouter (expo-router) and useAuth; wired role-aware
+            navigation helpers leadDetailHref, repProfileHref,
+            managerLeadsWithFilter. Admin + manager currently share the
+            manager routes (Sprint 3.5c TODO: dedicated admin rep profile).
+          - Pipeline: swapped the 3 static lists for <DrillDownableSection>:
+              • Najbliższe spotkania (icon=calendar) → router.push(lead detail)
+              • Decyzja klienta (icon=zap) → router.push(lead detail)
+              • Nowe leady wg handlowca (chips layout) → router.push(
+                /(manager)/leads?rep_id=<id>&created_today=1)
+          - Team: Top 3 rows are now Pressable → router.push(rep profile) with
+            chevron-right affordance. Nieaktywni uses DrillDownableSection
+            with chips layout; filters out reps with last_active_days_ago ≥ 999
+            (they're "never active", not "inactive").
+          - Verified visually on manager dashboard:
+              • calc 300 m² + 75 000 PLN → koszt 60 000, marża 15 000,
+                prowizja 7500 (exact Sprint 4.5 numbers).
+              • calc 300 m² + 50 000 PLN → red "UMOWA ZABLOKOWANA" warning,
+                prowizja 0.
+              • Daily widget collapsed → expanded.
+              • "Pokaż wszystkie (4)" on Gorące leady → modal with full list
+                + "Zamknij" CTA.
+              • chip "Jan: 1" on Nowe leady wg handlowca → navigates to
+                /leads?rep_id=<id>&created_today=1 with drill banner +
+                pre-filtered list (1 of 26 positions).
+  - task: "Sprint 3.5b — Manager Leads: read drill-down URL params"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(manager)/leads.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          - Added useLocalSearchParams read of `rep_id` + `created_today=1`.
+          - When active, pre-filters the leads array passed to FilterableList
+            (source filter, runs before FilterableList's own primary/secondary
+            filters and search).
+          - Shows a blue drill-down banner at top ("Filtr drill-down:
+            handlowiec <name> · dodane dziś") with a round X button to clear
+            the filter + drop the URL params via router.setParams.
+          - Empty-state copy tailored when drill is active.
 
 # --- Sprint 3.5: Daily Report Widget (2026-04-24) ---
 frontend_sprint35:

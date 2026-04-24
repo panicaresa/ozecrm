@@ -132,29 +132,17 @@ export default function AdminSettings() {
           <Text style={styles.section}>Kalkulator prowizji handlowca</Text>
           <Text style={styles.hint}>
             Parametry używane przez Szybki Kalkulator Prowizji (widget na dashboardach).
+            Marża liczona jest automatycznie z cen bazowych (koszt firmy) — nie trzeba
+            jej konfigurować osobno.
           </Text>
-          <View style={{ flexDirection: "row", gap: 8 }}>
-            <View style={{ flex: 1 }}>
-              <Field
-                label="Prowizja (% marży)"
-                value={String(settings.commission_percent ?? "")}
-                keyboardType="decimal-pad"
-                onChangeText={(v) => update("commission_percent", v)}
-                placeholder="50"
-                testID="admin-commission-percent"
-              />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Field
-                label="Marża na m² (PLN)"
-                value={String(settings.margin_per_m2 ?? "")}
-                keyboardType="decimal-pad"
-                onChangeText={(v) => update("margin_per_m2", v)}
-                placeholder="50"
-                testID="admin-margin-per-m2"
-              />
-            </View>
-          </View>
+          <Field
+            label="Prowizja (% marży)"
+            value={String(settings.commission_percent ?? "")}
+            keyboardType="decimal-pad"
+            onChangeText={(v) => update("commission_percent", v)}
+            placeholder="50"
+            testID="admin-commission-percent"
+          />
 
           <Text style={styles.section}>Bankowe RRSO</Text>
           <View style={{ gap: 8 }}>

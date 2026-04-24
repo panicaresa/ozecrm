@@ -2,9 +2,9 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, Linking, Platform } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { api, formatApiError } from "../../src/lib/api";
-import { colors, spacing } from "../../src/theme";
+import { colors, radius, spacing } from "../../src/theme";
 import { LeadCard, Lead } from "../../src/components/LeadCard";
 import {
   FilterableList,
@@ -91,11 +91,18 @@ const sorters: SortOption<Lead>[] = [
 
 export default function ManagerLeads() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ rep_id?: string; created_today?: string }>();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [reps, setReps] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [drillActive, setDrillActive] = useState(false);
+
+  // Activate drill filter whenever ?rep_id=... arrives. User can clear it.
+  useEffect(() => {
+    if (params.rep_id || params.created_today) setDrillActive(true);
+  }, [params.rep_id, params.created_today]);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -121,6 +128,32 @@ export default function ManagerLeads() {
 
   const primaryFilters = useMemo(() => buildPrimaryFilters(leads), [leads]);
   const repFilters = useMemo(() => buildRepFilters(reps, leads), [reps, leads]);
+
+  // Drill-down source-filter (from daily-report chip: rep_id + created_today).
+  const filteredLeads = useMemo(() => {
+    if (!drillActive) return leads;
+    let out = leads;
+    if (params.rep_id) {
+      out = out.filter((l) => l.assigned_to === params.rep_id);
+    }
+    if (params.created_today === "1") {
+      const start = new Date();
+      start.setHours(0, 0, 0, 0);
+      out = out.filter((l) => ts(l.created_at) >= start.getTime());
+    }
+    return out;
+  }, [leads, drillActive, params.rep_id, params.created_today]);
+
+  const drillRepName = useMemo(() => {
+    if (!params.rep_id) return null;
+    const r = reps.find((x) => x.id === params.rep_id);
+    return r ? r.name || r.email : params.rep_id;
+  }, [params.rep_id, reps]);
+
+  const clearDrillFilter = useCallback(() => {
+    setDrillActive(false);
+    router.setParams({ rep_id: undefined, created_today: undefined } as never);
+  }, [router]);
 
   const swipeActions: SwipeAction<Lead>[] = useMemo(
     () => [
@@ -174,11 +207,34 @@ export default function ManagerLeads() {
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>Leady zespołu</Text>
-          <Text style={styles.sub}>{leads.length} pozycji · {reps.length} handlowców</Text>
+          <Text style={styles.sub}>
+            {drillActive
+              ? `${filteredLeads.length} z ${leads.length} pozycji (filtr drill-down)`
+              : `${leads.length} pozycji · ${reps.length} handlowców`}
+          </Text>
         </View>
       </View>
+      {drillActive && (
+        <View style={styles.drillBanner} testID="manager-leads-drill-banner">
+          <Feather name="filter" size={14} color={colors.primary} />
+          <Text style={styles.drillBannerText} numberOfLines={2}>
+            Filtr drill-down:
+            {drillRepName ? ` handlowiec ${drillRepName}` : ""}
+            {params.created_today === "1" ? " · dodane dziś" : ""}
+          </Text>
+          <TouchableOpacity
+            onPress={clearDrillFilter}
+            style={styles.drillClearBtn}
+            hitSlop={8}
+            testID="manager-leads-drill-clear"
+            accessibilityLabel="Wyczyść filtr"
+          >
+            <Feather name="x" size={14} color={colors.primary} />
+          </TouchableOpacity>
+        </View>
+      )}
       <FilterableList<Lead>
-        data={leads}
+        data={filteredLeads}
         keyExtractor={(l) => l.id}
         renderItem={(item) => <LeadCard lead={item} testID={`lead-${item.id}`} />}
         filters={primaryFilters}
@@ -200,7 +256,9 @@ export default function ManagerLeads() {
             <Text style={styles.emptyTitle}>{err || "Brak leadów"}</Text>
             {!err && (
               <Text style={styles.emptySub}>
-                Zmień filtr lub odśwież listę. Dodawanie leadów to zadanie handlowca.
+                {drillActive
+                  ? "Brak leadów spełniających filtr drill-down. Wyczyść filtr, aby zobaczyć pełną listę."
+                  : "Zmień filtr lub odśwież listę. Dodawanie leadów to zadanie handlowca."}
               </Text>
             )}
           </View>
@@ -226,6 +284,36 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 20, fontWeight: "900", color: colors.textPrimary },
   sub: { fontSize: 12, color: colors.textSecondary },
+  drillBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: `${colors.primary}40`,
+    backgroundColor: `${colors.primary}10`,
+  },
+  drillBannerText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.primary,
+    lineHeight: 16,
+  },
+  drillClearBtn: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.paper,
+    borderWidth: 1,
+    borderColor: `${colors.primary}40`,
+  },
   emptyBox: { alignItems: "center", padding: 32, gap: 8 },
   emptyTitle: { fontSize: 15, fontWeight: "800", color: colors.textPrimary, marginTop: 6 },
   emptySub: { fontSize: 12, color: colors.textSecondary, textAlign: "center", lineHeight: 17 },

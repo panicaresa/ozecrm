@@ -234,7 +234,11 @@ class SettingsIn(BaseModel):
     default_subsidy: float = 20000.0
     default_months: int = 119
     commission_percent: float = 50.0  # % marży globalnej trafia do handlowca
-    margin_per_m2: float = 50.0  # bazowy szacunkowy % marży na m² (do widgetu prowizji)
+    # DEPRECATED (Sprint 4.5+) — replaced by cost-tiered calculation
+    # (margin = gross_amount - firm_cost based on base_price_low/high).
+    # Retained for historical read-only compatibility with old leads that had
+    # lead.margin_override set, and with the legacy /api/dashboard/finance.
+    margin_per_m2: float = 50.0
     rrso_rates: List[Dict[str, Any]] = Field(default_factory=list)
     excluded_zip_codes: List[str] = Field(default_factory=list)
     company_name: str = "Polska Grupa OZE Sp. z o.o."
@@ -1671,6 +1675,7 @@ async def _compute_daily_report(
                     "lead_id": lead.get("id"),
                     "client_name": lead.get("client_name"),
                     "meeting_at": iso(mt),
+                    "rep_id": lead.get("assigned_to"),
                     "rep_name": rep_name_by_id.get(lead.get("assigned_to")) or "—",
                 }
             )
@@ -1680,16 +1685,28 @@ async def _compute_daily_report(
     if scope == "team":
         hot_filter["assigned_to"] = {"$in": rep_ids}
     hot_list = await db.leads.find(
-        hot_filter, {"_id": 0, "id": 1, "client_name": 1, "assigned_to": 1}
+        hot_filter,
+        {"_id": 0, "id": 1, "client_name": 1, "assigned_to": 1, "phone": 1, "address": 1},
     ).to_list(500)
 
     new_leads_filter: Dict[str, Any] = {"created_at": {"$gte": start_dt, "$lte": end_dt}}
     if scope == "team":
         new_leads_filter["assigned_to"] = {"$in": rep_ids}
     new_leads = await db.leads.find(new_leads_filter).to_list(500)
-    new_leads_by_rep: Dict[str, int] = defaultdict(int)
+    new_leads_by_rep_counts: Dict[str, int] = defaultdict(int)
+    new_leads_by_rep_items: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for l in new_leads:
-        new_leads_by_rep[l.get("assigned_to") or "—"] += 1
+        rid = l.get("assigned_to") or "—"
+        new_leads_by_rep_counts[rid] += 1
+        # keep up to 50 leads per rep for modal drill-down
+        if len(new_leads_by_rep_items[rid]) < 50:
+            new_leads_by_rep_items[rid].append(
+                {
+                    "id": l.get("id"),
+                    "client_name": l.get("client_name"),
+                    "created_at": iso(l.get("created_at")),
+                }
+            )
 
     # ── Blok C: team aggregates ─────────────────────────────────────────────
     margin_by_rep: Dict[str, float] = defaultdict(float)
@@ -1853,16 +1870,24 @@ async def _compute_daily_report(
                 {
                     "lead_id": l.get("id"),
                     "client_name": l.get("client_name"),
+                    "rep_id": l.get("assigned_to"),
                     "rep_name": rep_name_by_id.get(l.get("assigned_to")) or "—",
+                    "phone": l.get("phone"),
+                    "address": l.get("address"),
                 }
-                for l in hot_list[:5]
+                for l in hot_list
             ],
         },
         "new_leads_added": {
             "count": len(new_leads),
             "by_rep": [
-                {"rep_name": rep_name_by_id.get(rid) or "—", "count": cnt}
-                for rid, cnt in sorted(new_leads_by_rep.items(), key=lambda x: -x[1])
+                {
+                    "rep_id": rid if rid != "—" else None,
+                    "rep_name": rep_name_by_id.get(rid) or "—",
+                    "count": cnt,
+                    "leads": new_leads_by_rep_items.get(rid, []),
+                }
+                for rid, cnt in sorted(new_leads_by_rep_counts.items(), key=lambda x: -x[1])
             ],
         },
         "top_rep": top_rep,

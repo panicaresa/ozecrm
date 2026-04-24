@@ -4,12 +4,16 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
+  Pressable,
   ActivityIndicator,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { colors, radius, spacing } from "../theme";
 import { api, formatApiError } from "../lib/api";
 import { fmtPln } from "../lib/offerEngine";
+import { useAuth } from "../lib/auth";
+import { DrillDownableSection } from "./DrillDownableSection";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Types matching the GET /api/reports/daily response shape (server.py ~1811)
@@ -55,16 +59,29 @@ interface DailyReport {
       lead_id: string;
       client_name: string;
       meeting_at: string;
+      rep_id?: string;
       rep_name: string;
     }[];
   };
   hot_leads: {
     count: number;
-    list: { lead_id: string; client_name: string; rep_name: string }[];
+    list: {
+      lead_id: string;
+      client_name: string;
+      rep_id?: string;
+      rep_name: string;
+      phone?: string;
+      address?: string;
+    }[];
   };
   new_leads_added: {
     count: number;
-    by_rep: { rep_name: string; count: number }[];
+    by_rep: {
+      rep_id?: string | null;
+      rep_name: string;
+      count: number;
+      leads?: { id: string; client_name?: string; created_at?: string }[];
+    }[];
   };
   top_rep?: {
     rep_id: string;
@@ -203,6 +220,34 @@ export function DailyReportWidget({
   defaultExpanded = false,
   refreshIntervalMs = 60000,
 }: Props) {
+  const router = useRouter();
+  const { user } = useAuth();
+  const role = user?.role;
+
+  // Route helpers — keep URLs role-aware. Admin uses manager routes for lead
+  // detail / rep profile (no dedicated admin pages yet — TODO Sprint 3.5c).
+  const leadDetailHref = useCallback(
+    (leadId: string): string => {
+      if (role === "manager" || role === "admin") return `/(manager)/lead/${leadId}`;
+      return `/(rep)/lead/${leadId}`;
+    },
+    [role]
+  );
+  const repProfileHref = useCallback(
+    (repId: string): string => {
+      // Both manager and admin use the manager rep profile route today.
+      return `/(manager)/rep/${repId}`;
+    },
+    []
+  );
+  const managerLeadsWithFilter = useCallback(
+    (repId: string) => ({
+      pathname: "/(manager)/leads" as const,
+      params: { rep_id: repId, created_today: "1" },
+    }),
+    []
+  );
+
   const [expanded, setExpanded] = useState<boolean>(!!defaultExpanded);
   const [period, setPeriod] = useState<"today" | "yesterday">("today");
   const [data, setData] = useState<DailyReport | null>(null);
@@ -524,12 +569,20 @@ export function DailyReportWidget({
     );
   };
 
-  // Block B — Pipeline
+  // Block B — Pipeline (drill-downs)
   const renderBlockPipeline = () => {
     const mt = data.meetings_tomorrow;
     const hl = data.hot_leads;
     const nl = data.new_leads_added;
     const anyContent = mt.count > 0 || hl.count > 0 || nl.count > 0;
+
+    // Normalize items for DrillDownableSection.
+    const meetingItems = mt.list.map((m) => ({ id: m.lead_id, ...m }));
+    const hotItems = hl.list.map((l) => ({ id: l.lead_id, ...l }));
+    const newByRepItems = nl.by_rep
+      .filter((r) => !!r.rep_id) // exclude unassigned bucket
+      .map((r) => ({ id: r.rep_id as string, ...r }));
+
     return (
       <View style={styles.block} testID={`${testID}-block-pipeline`}>
         <View style={styles.blockHead}>
@@ -552,59 +605,106 @@ export function DailyReportWidget({
           </View>
         </View>
 
-        {mt.list.length > 0 && (
-          <View style={{ marginTop: 10 }}>
-            <Text style={styles.subBlockTitle}>Najbliższe spotkania</Text>
-            {mt.list.slice(0, 3).map((m) => (
-              <View style={styles.listRow} key={m.lead_id}>
-                <Feather name="calendar" size={12} color={colors.info} />
-                <Text style={styles.listPrimary} numberOfLines={1}>
+        {meetingItems.length > 0 && (
+          <DrillDownableSection
+            testID={`${testID}-drill-meetings`}
+            title="Najbliższe spotkania"
+            icon="calendar"
+            iconColor={colors.info}
+            items={meetingItems}
+            renderItemPreview={(m) => (
+              <View style={styles.ddRow}>
+                <Text style={styles.ddTime}>{fmtTime(m.meeting_at)}</Text>
+                <Text style={styles.ddClient} numberOfLines={1}>
                   {m.client_name}
                 </Text>
-                <Text style={styles.listSecondary} numberOfLines={1}>
-                  {fmtDateTime(m.meeting_at)} · {m.rep_name}
+                <Text style={styles.ddSub} numberOfLines={1}>
+                  {m.rep_name}
                 </Text>
               </View>
-            ))}
-            {mt.list.length > 3 && (
-              <Text style={styles.moreText}>+{mt.list.length - 3} więcej</Text>
             )}
-          </View>
+            renderItemFull={(m) => (
+              <View>
+                <Text style={styles.ddClientBig} numberOfLines={1}>
+                  {m.client_name}
+                </Text>
+                <Text style={styles.ddSub}>
+                  {fmtDateTime(m.meeting_at)} · Handlowiec: {m.rep_name}
+                </Text>
+              </View>
+            )}
+            onItemPress={(m) => router.push(leadDetailHref(m.lead_id) as never)}
+            emptyCopy="Brak zaplanowanych spotkań"
+            modalTitle="Spotkania jutro"
+          />
         )}
 
-        {hl.list.length > 0 && (
-          <View style={{ marginTop: 10 }}>
-            <Text style={styles.subBlockTitle}>Decyzja klienta</Text>
-            {hl.list.slice(0, 3).map((l) => (
-              <View style={styles.listRow} key={l.lead_id}>
-                <Feather name="zap" size={12} color={colors.accent} />
-                <Text style={styles.listPrimary} numberOfLines={1}>
+        {hotItems.length > 0 && (
+          <DrillDownableSection
+            testID={`${testID}-drill-hot`}
+            title="Decyzja klienta"
+            icon="zap"
+            iconColor={colors.accent}
+            items={hotItems}
+            renderItemPreview={(l) => (
+              <View style={styles.ddRow}>
+                <Text style={styles.ddClient} numberOfLines={1}>
                   {l.client_name}
                 </Text>
-                <Text style={styles.listSecondary} numberOfLines={1}>
+                <Text style={styles.ddSub} numberOfLines={1}>
                   {l.rep_name}
                 </Text>
               </View>
-            ))}
-            {hl.count > 3 && (
-              <Text style={styles.moreText}>+{hl.count - 3} więcej</Text>
             )}
-          </View>
+            renderItemFull={(l) => (
+              <View>
+                <Text style={styles.ddClientBig} numberOfLines={1}>
+                  {l.client_name}
+                </Text>
+                <Text style={styles.ddSub} numberOfLines={1}>
+                  {l.address ? `${l.address} · ` : ""}{l.rep_name}
+                </Text>
+              </View>
+            )}
+            onItemPress={(l) => router.push(leadDetailHref(l.lead_id) as never)}
+            modalTitle="Gorące leady (Decyzja)"
+          />
         )}
 
-        {nl.by_rep.length > 0 && (
-          <View style={{ marginTop: 10 }}>
-            <Text style={styles.subBlockTitle}>Nowe leady wg handlowca</Text>
-            <View style={styles.chipsRow}>
-              {nl.by_rep.slice(0, 6).map((r, i) => (
-                <View key={`${r.rep_name}-${i}`} style={styles.miniChip}>
-                  <Text style={styles.miniChipText}>
-                    {r.rep_name.split(" ")[0]}: <Text style={{ fontWeight: "900" }}>{r.count}</Text>
+        {newByRepItems.length > 0 && (
+          <DrillDownableSection
+            testID={`${testID}-drill-new`}
+            title="Nowe leady wg handlowca"
+            icon="user-plus"
+            iconColor={colors.secondary}
+            items={newByRepItems}
+            layout="chips"
+            maxInline={6}
+            renderItemPreview={(g) => (
+              <View style={styles.newLeadChip}>
+                <Text style={styles.newLeadChipText}>
+                  {(g.rep_name || "—").split(" ")[0]}:{" "}
+                  <Text style={{ fontWeight: "900", color: colors.secondary }}>
+                    {g.count}
                   </Text>
-                </View>
-              ))}
-            </View>
-          </View>
+                </Text>
+              </View>
+            )}
+            renderItemFull={(g) => (
+              <View>
+                <Text style={styles.ddClientBig} numberOfLines={1}>
+                  {g.rep_name}
+                </Text>
+                <Text style={styles.ddSub}>
+                  {g.count} {g.count === 1 ? "nowy lead" : "nowych leadów"} dziś
+                </Text>
+              </View>
+            )}
+            onItemPress={(g) =>
+              router.push(managerLeadsWithFilter(g.rep_id as string) as never)
+            }
+            modalTitle="Nowe leady dziś"
+          />
         )}
 
         {!anyContent && <Text style={styles.blockEmpty}>Brak aktywności w pipeline</Text>}
@@ -615,6 +715,11 @@ export function DailyReportWidget({
   // Block C — Zespół
   const renderBlockTeam = () => {
     const ta = data.team_activity;
+    // Filter out never-active reps (last_active_days_ago >= 999) — those are "new",
+    // not "inactive". They still count in total_reps, but don't belong here.
+    const inactiveReal = (ta.inactive_list || []).filter(
+      (r) => r.last_active_days_ago < 999
+    );
     return (
       <View style={styles.block} testID={`${testID}-block-team`}>
         <View style={styles.blockHead}>
@@ -650,7 +755,16 @@ export function DailyReportWidget({
           <View style={{ marginTop: 10 }}>
             <Text style={styles.subBlockTitle}>Top handlowcy</Text>
             {data.top3_reps.map((r) => (
-              <View key={r.rep_id} style={styles.podiumRow}>
+              <Pressable
+                key={r.rep_id}
+                onPress={() => router.push(repProfileHref(r.rep_id) as never)}
+                style={({ pressed }) => [
+                  styles.podiumRow,
+                  pressed && { opacity: 0.6 },
+                ]}
+                accessibilityRole="button"
+                testID={`${testID}-top-${r.rep_id}`}
+              >
                 <Text style={styles.podiumMedal}>{r.medal}</Text>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.podiumName} numberOfLines={1}>
@@ -660,25 +774,43 @@ export function DailyReportWidget({
                     {r.contracts_today} {r.contracts_today === 1 ? "umowa" : "umów"} · {fmtPln(r.margin_today)}
                   </Text>
                 </View>
-              </View>
+                <Feather name="chevron-right" size={14} color={colors.textSecondary} />
+              </Pressable>
             ))}
           </View>
         )}
 
-        {ta.inactive_list.length > 0 && (
-          <View style={{ marginTop: 10 }}>
-            <Text style={styles.subBlockTitle}>Nieaktywni &gt;3 dni</Text>
-            <View style={styles.chipsRow}>
-              {ta.inactive_list.slice(0, 6).map((r) => (
-                <View key={r.rep_id} style={[styles.miniChip, { backgroundColor: `${colors.error}10`, borderColor: `${colors.error}30` }]}>
-                  <Feather name="user-x" size={10} color={colors.error} />
-                  <Text style={[styles.miniChipText, { color: colors.error }]}>
-                    {r.rep_name.split(" ")[0]}: {r.last_active_days_ago >= 999 ? "—" : `${r.last_active_days_ago}d`}
-                  </Text>
-                </View>
-              ))}
-            </View>
-          </View>
+        {inactiveReal.length > 0 && (
+          <DrillDownableSection
+            testID={`${testID}-drill-inactive`}
+            title="Nieaktywni > 3 dni"
+            icon="user-x"
+            iconColor={colors.error}
+            items={inactiveReal.map((r) => ({ id: r.rep_id, ...r }))}
+            layout="chips"
+            maxInline={6}
+            renderItemPreview={(r) => (
+              <View style={styles.inactiveChip}>
+                <Feather name="user-x" size={10} color={colors.error} />
+                <Text style={styles.inactiveChipText}>
+                  {(r.rep_name || "—").split(" ")[0]}: {r.last_active_days_ago}d
+                </Text>
+              </View>
+            )}
+            renderItemFull={(r) => (
+              <View>
+                <Text style={styles.ddClientBig} numberOfLines={1}>
+                  {r.rep_name}
+                </Text>
+                <Text style={styles.ddSub}>
+                  Ostatnia aktywność: {r.last_active_days_ago} dni temu
+                </Text>
+              </View>
+            )}
+            onItemPress={(r) => router.push(repProfileHref(r.rep_id) as never)}
+            emptyCopy="Wszyscy aktywni 🎉"
+            modalTitle="Nieaktywni handlowcy"
+          />
         )}
 
         {data.top3_reps.length === 0 && ta.total_reps === 0 && (
@@ -784,6 +916,66 @@ export function DailyReportWidget({
 // Styles — match Manager Dashboard & FinanceScreen (paper card + border)
 // ──────────────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
+  // Drill-down row/chip local styles (Sprint 3.5b)
+  ddRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
+  },
+  ddTime: {
+    fontSize: 12,
+    fontWeight: "900",
+    color: colors.info,
+    minWidth: 42,
+    fontVariant: ["tabular-nums"],
+  },
+  ddClient: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.textPrimary,
+  },
+  ddClientBig: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: colors.textPrimary,
+  },
+  ddSub: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    fontWeight: "600",
+    marginTop: 2,
+  },
+  newLeadChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: `${colors.secondary}30`,
+    backgroundColor: `${colors.secondary}10`,
+  },
+  newLeadChipText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.textPrimary,
+  },
+  inactiveChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: `${colors.error}30`,
+    backgroundColor: `${colors.error}10`,
+  },
+  inactiveChipText: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: colors.error,
+  },
   card: {
     backgroundColor: colors.paper,
     borderRadius: radius.lg,
