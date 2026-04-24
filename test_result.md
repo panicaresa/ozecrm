@@ -639,11 +639,94 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Sprint 3.5c micro — GestureHandlerRootView + 999d alert filter + admin rep profile"
+    - "Sprint 3.5d micro — LeadActionSheet in DrillDownable modal (research-mode actions)"
   stuck_tasks:
     - "Faza 2.0 GET /api/tracking/track/{rep_id} role-scoped"
   test_all: false
   test_priority: "high_first"
+
+# --- Sprint 3.5d (micro-sprint) 2026-04-24 ---
+sprint_35d_micro:
+  - task: "Sprint 3.5d — LeadActionSheet component"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/LeadActionSheet.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          New reusable bottom sheet shown ONLY from DrillDownableSection modal
+          rows. 4 options:
+            - Primary "Zobacz szczegóły" (large button, colors.primary)
+            - "Zadzwoń" (tel: linking — disabled when no phone)
+            - "Mapy" (platform-aware: ios maps:, android google.navigation:,
+              web maps.google.com — disabled when no lat/lng; shows
+              "BRAK GPS" hint)
+            - "Handlowiec" (navigate to rep profile — disabled when
+              onViewRep is not provided)
+          Backdrop tap or "Anuluj" closes sheet. Android back button closes
+          via onRequestClose. Uses SafeAreaView bottom edge + slide
+          animation (native) / fade (web).
+  - task: "Sprint 3.5d — DrillDownableSection: opt-in action sheet"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/DrillDownableSection.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Added 3 new optional props: useActionSheet (default false — backward
+          compat), scope, repProfileHrefBuilder. When useActionSheet=true,
+          tapping a row INSIDE THE FULL-LIST MODAL stores it in state and
+          opens LeadActionSheet. Inline preview rows (above the modal) keep
+          instant-navigate behaviour — action sheet is research-mode only.
+          Actions:
+            - "Zobacz szczegóły" → close both sheets + onItemPress(item)
+            - Call / Map → close action sheet only (drill modal stays open)
+            - "Handlowiec" → close both + router.push(
+              repProfileHrefBuilder(item))
+            - "Anuluj" / backdrop → close action sheet only
+  - task: "Sprint 3.5d — DailyReportWidget: activate useActionSheet on lead drills"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/DailyReportWidget.tsx + /app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Enabled useActionSheet + scope + repProfileHrefBuilder on TWO drill
+          sections that represent individual leads:
+            - Najbliższe spotkania (meetings_tomorrow)
+            - Decyzja klienta (hot_leads)
+          NOT enabled for group chips:
+            - Nowe leady wg handlowca → still navigates to
+              /(manager)/leads with filter
+            - Nieaktywni → still navigates to rep profile
+          Backend: enriched meetings_tomorrow.list + hot_leads.list items
+          with phone, address, latitude, longitude, status so that the
+          LeadActionSheet Call + Map tiles can light up. Existing 74/74
+          backend tests remain green (schema additions only).
+          Verified on web:
+            - Manager → Daily Report → expand → "Pokaż wszystkie (4)"
+              on Gorące leady → drill modal opens (4 rows)
+            - Tap a lead row → ActionSheet slides up OVER drill modal
+              with Nowak Jadwiga header, address, rep_name, primary
+              "Zobacz szczegóły" button + 3 action tiles
+              (Zadzwoń / Mapy BRAK GPS / Handlowiec)
+            - Tap Cancel → action sheet closes, drill modal stays open ✅
+            - Tap "Zobacz szczegóły" → both close, navigate to
+              /lead/656f1ebe-... ✅
+            - Regression: handlowiec → Moje leady → tap MAREK SSFS →
+              instant nav to /lead/d08f33e1-... (NO action sheet) ✅
 
 # --- Sprint 3.5c (micro-sprint) 2026-04-24 ---
 sprint_35c_micro:

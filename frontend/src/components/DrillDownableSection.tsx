@@ -12,6 +12,10 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import { colors, radius, spacing } from "../theme";
+import {
+  LeadActionSheet,
+  LeadActionSheetLead,
+} from "./LeadActionSheet";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Generic drill-down section — Sprint 3.5b
@@ -77,6 +81,23 @@ export interface DrillDownableSectionProps<T extends DrillDownItem> {
   layout?: "list" | "chips";
   /** Test ID root (appended with -row-<id> / -show-more / -modal / -close). */
   testID?: string;
+
+  // ── Sprint 3.5d micro — LeadActionSheet integration (opt-in) ──────────────
+  /**
+   * When true, tapping a row INSIDE THE FULL-LIST MODAL opens a
+   * <LeadActionSheet> instead of navigating immediately. Inline preview rows
+   * (above the modal) keep the instant-navigate behaviour. Default: false
+   * (backward compat with existing call sites).
+   */
+  useActionSheet?: boolean;
+  /** Scope hint forwarded to LeadActionSheet (future per-role copy/actions). */
+  scope?: "admin" | "manager" | "rep";
+  /**
+   * When `useActionSheet=true`, builds the rep profile route that the
+   * "Handlowiec" tile navigates to. If not provided (or returns an empty
+   * string), the tile is rendered disabled.
+   */
+  repProfileHrefBuilder?: (item: T) => string | null | undefined;
 }
 
 function DrillDownableSectionInner<T extends DrillDownItem>({
@@ -92,21 +113,64 @@ function DrillDownableSectionInner<T extends DrillDownItem>({
   modalTitle,
   layout = "list",
   testID,
+  useActionSheet = false,
+  scope,
+  repProfileHrefBuilder,
 }: DrillDownableSectionProps<T>) {
   const [modalOpen, setModalOpen] = useState(false);
+  // Sprint 3.5d: when useActionSheet=true, tapping a modal row stores the
+  // item here and opens <LeadActionSheet> over the drill-down modal.
+  const [actionSheetItem, setActionSheetItem] = useState<T | null>(null);
 
   const rendered = useMemo(() => items.slice(0, maxInline), [items, maxInline]);
   const overflow = items.length - rendered.length;
   const effectiveFullRenderer = renderItemFull || renderItemPreview;
 
-  const handleRowPress = useCallback(
+  // Inline (non-modal) row press — always navigates immediately.
+  const handleInlinePress = useCallback(
     (item: T) => {
-      if (modalOpen) setModalOpen(false);
-      // Defer so modal close animation doesn't fight navigation on native
-      setTimeout(() => onItemPress(item), modalOpen ? 120 : 0);
+      onItemPress(item);
     },
-    [modalOpen, onItemPress]
+    [onItemPress]
   );
+
+  // Modal row press — either open action sheet (opt-in) or close modal and
+  // navigate (legacy behaviour, default).
+  const handleModalRowPress = useCallback(
+    (item: T) => {
+      if (useActionSheet) {
+        setActionSheetItem(item);
+        return;
+      }
+      setModalOpen(false);
+      setTimeout(() => onItemPress(item), 120);
+    },
+    [useActionSheet, onItemPress]
+  );
+
+  // Action sheet: "Zobacz szczegóły" — closes action sheet, closes the
+  // drill-down modal, then navigates.
+  const handleActionSheetDetails = useCallback(() => {
+    if (!actionSheetItem) return;
+    const item = actionSheetItem;
+    setActionSheetItem(null);
+    setModalOpen(false);
+    setTimeout(() => onItemPress(item), 160);
+  }, [actionSheetItem, onItemPress]);
+
+  // Action sheet: "Handlowiec" — closes everything and navigates to the
+  // rep profile route provided by the caller.
+  const handleActionSheetRep = useCallback(() => {
+    if (!actionSheetItem || !repProfileHrefBuilder) return;
+    const href = repProfileHrefBuilder(actionSheetItem);
+    if (!href) return;
+    setActionSheetItem(null);
+    setModalOpen(false);
+    // Lazy require to avoid circular deps at module-init time.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { router } = require("expo-router");
+    setTimeout(() => router.push(href), 160);
+  }, [actionSheetItem, repProfileHrefBuilder]);
 
   const renderHeader = () => (
     <View style={styles.head}>
@@ -143,7 +207,7 @@ function DrillDownableSectionInner<T extends DrillDownItem>({
           {rendered.map((item) => (
             <Pressable
               key={item.id}
-              onPress={() => handleRowPress(item)}
+              onPress={() => handleInlinePress(item)}
               style={({ pressed }) => [styles.chipWrap, pressed && styles.pressed]}
               accessibilityRole="button"
               testID={testID ? `${testID}-row-${item.id}` : undefined}
@@ -168,7 +232,7 @@ function DrillDownableSectionInner<T extends DrillDownItem>({
           {rendered.map((item) => (
             <Pressable
               key={item.id}
-              onPress={() => handleRowPress(item)}
+              onPress={() => handleInlinePress(item)}
               style={({ pressed }) => [styles.row, pressed && styles.pressed]}
               accessibilityRole="button"
               testID={testID ? `${testID}-row-${item.id}` : undefined}
@@ -230,7 +294,7 @@ function DrillDownableSectionInner<T extends DrillDownItem>({
               {items.map((item) => (
                 <Pressable
                   key={item.id}
-                  onPress={() => handleRowPress(item)}
+                  onPress={() => handleModalRowPress(item)}
                   style={({ pressed }) => [styles.modalRow, pressed && styles.pressed]}
                   accessibilityRole="button"
                   testID={testID ? `${testID}-modal-row-${item.id}` : undefined}
@@ -252,6 +316,23 @@ function DrillDownableSectionInner<T extends DrillDownItem>({
           </SafeAreaView>
         </View>
       </Modal>
+
+      {/* Sprint 3.5d — LeadActionSheet rendered above the drill-down modal. */}
+      {useActionSheet && (
+        <LeadActionSheet
+          visible={!!actionSheetItem}
+          onClose={() => setActionSheetItem(null)}
+          lead={actionSheetItem as unknown as LeadActionSheetLead | null}
+          onViewDetails={handleActionSheetDetails}
+          onViewRep={
+            actionSheetItem && repProfileHrefBuilder
+              ? handleActionSheetRep
+              : undefined
+          }
+          scope={scope}
+          testID={testID ? `${testID}-action-sheet` : undefined}
+        />
+      )}
     </View>
   );
 }

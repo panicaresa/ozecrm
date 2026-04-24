@@ -1677,6 +1677,12 @@ async def _compute_daily_report(
                     "meeting_at": iso(mt),
                     "rep_id": lead.get("assigned_to"),
                     "rep_name": rep_name_by_id.get(lead.get("assigned_to")) or "—",
+                    # Sprint 3.5d: enrich for LeadActionSheet (Call / Map)
+                    "phone": lead.get("phone"),
+                    "address": lead.get("address"),
+                    "latitude": lead.get("latitude"),
+                    "longitude": lead.get("longitude"),
+                    "status": lead.get("status"),
                 }
             )
     meetings_period.sort(key=lambda m: m.get("meeting_at") or "")
@@ -1686,7 +1692,17 @@ async def _compute_daily_report(
         hot_filter["assigned_to"] = {"$in": rep_ids}
     hot_list = await db.leads.find(
         hot_filter,
-        {"_id": 0, "id": 1, "client_name": 1, "assigned_to": 1, "phone": 1, "address": 1},
+        {
+            "_id": 0,
+            "id": 1,
+            "client_name": 1,
+            "assigned_to": 1,
+            "phone": 1,
+            "address": 1,
+            "latitude": 1,
+            "longitude": 1,
+            "status": 1,
+        },
     ).to_list(500)
 
     new_leads_filter: Dict[str, Any] = {"created_at": {"$gte": start_dt, "$lte": end_dt}}

@@ -614,6 +614,11 @@ export function DailyReportWidget({
             icon="calendar"
             iconColor={colors.info}
             items={meetingItems}
+            useActionSheet
+            scope={role as "admin" | "manager" | "rep" | undefined}
+            repProfileHrefBuilder={(m) =>
+              m.rep_id ? repProfileHref(m.rep_id) : null
+            }
             renderItemPreview={(m) => (
               <View style={styles.ddRow}>
                 <Text style={styles.ddTime}>{fmtTime(m.meeting_at)}</Text>
@@ -648,6 +653,11 @@ export function DailyReportWidget({
             icon="zap"
             iconColor={colors.accent}
             items={hotItems}
+            useActionSheet
+            scope={role as "admin" | "manager" | "rep" | undefined}
+            repProfileHrefBuilder={(l) =>
+              l.rep_id ? repProfileHref(l.rep_id) : null
+            }
             renderItemPreview={(l) => (
               <View style={styles.ddRow}>
                 <Text style={styles.ddClient} numberOfLines={1}>
