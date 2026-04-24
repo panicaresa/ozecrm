@@ -277,7 +277,11 @@ class ContractIn(BaseModel):
     building_type: str  # mieszkalny | gospodarczy
     roof_area_m2: float
     gross_amount: float  # cena brutto umowy w PLN
-    global_margin: float  # marża PLN — bazowa do liczenia prowizji
+    # Sprint 4.5 — fraud prevention: global_margin jest teraz wyliczany
+    # automatycznie z (gross_amount - firm_cost). Pole pozostawione opcjonalne
+    # dla backward compat i świadomego override przez manager/admin.
+    global_margin: Optional[float] = None  # marża PLN — ignorowana dla roli handlowiec
+    allow_negative_margin: Optional[bool] = False  # tylko manager/admin
     financing_type: str  # credit | cash
     down_payment_amount: Optional[float] = None  # jeśli cash
     installments_count: Optional[int] = None  # jeśli cash
@@ -1265,6 +1269,36 @@ def _compute_lead_financials(lead: Dict[str, Any], settings_doc: Dict[str, Any])
     }
 
 
+# Sprint 4.5 — fraud prevention helper for POST /contracts
+# Firm cost model for "wymiana eternitu na blachę" (dekarska):
+#   roof_area_m2 >= 200 → cost_per_m2 = settings.base_price_high (default 200 PLN/m² netto)
+#   roof_area_m2 <  200 → cost_per_m2 = settings.base_price_low  (default 275 PLN/m² netto)
+# Margin = gross_amount - firm_cost (never trusted from handlowiec input).
+def _compute_cost_and_margin(
+    roof_area_m2: float,
+    gross_amount: float,
+    settings_doc: Dict[str, Any],
+) -> Dict[str, float]:
+    base_low = float(settings_doc.get("base_price_low") or 275.0)
+    base_high = float(settings_doc.get("base_price_high") or 200.0)
+
+    cost_per_m2 = base_high if float(roof_area_m2) >= 200.0 else base_low
+    firm_cost = round(float(roof_area_m2) * cost_per_m2, 2)
+
+    computed_margin = round(float(gross_amount) - firm_cost, 2)
+
+    margin_pct_of_cost = (
+        round((computed_margin / firm_cost) * 100.0, 2) if firm_cost > 0 else 0.0
+    )
+
+    return {
+        "cost_per_m2": cost_per_m2,
+        "firm_cost": firm_cost,
+        "computed_margin": computed_margin,
+        "margin_pct_of_cost": margin_pct_of_cost,
+    }
+
+
 def _month_bounds(ref: Optional[datetime] = None) -> tuple:
     ref = ref or now()
     start = datetime(ref.year, ref.month, 1, tzinfo=timezone.utc)
@@ -1522,6 +1556,13 @@ def _serialize_contract(c: Dict[str, Any], rep_name: Optional[str] = None) -> Di
         "total_paid_amount": c.get("total_paid_amount") or 0.0,
         "commission_percent": c.get("commission_percent"),
         "commission_amount": c.get("commission_amount"),
+        # Sprint 4.5 — fraud-prevention audit fields (nullable for legacy contracts)
+        "cost_per_m2": c.get("cost_per_m2"),
+        "firm_cost": c.get("firm_cost"),
+        "computed_margin": c.get("computed_margin"),
+        "margin_pct_of_cost": c.get("margin_pct_of_cost"),
+        "margin_override_by_role": c.get("margin_override_by_role"),
+        "negative_margin_override": bool(c.get("negative_margin_override")),
         "note": c.get("note"),
         "cancelled": bool(c.get("cancelled")),
         **derived,
@@ -1538,6 +1579,39 @@ async def _contract_scope_query(user: Dict[str, Any]) -> Dict[str, Any]:
     return {"rep_id": user["id"]}
 
 
+@api.post("/contracts/preview-cost")
+async def preview_cost(
+    body: Dict[str, Any],
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Sprint 4.5 — live cost/margin preview for the add-contract form.
+
+    Returns the deterministic firm cost for a given roof_area_m2 + gross_amount,
+    plus computed margin, margin % of cost, and the resulting commission.
+    Never mutates DB.
+    """
+    try:
+        roof_area = float(body.get("roof_area_m2") or 0)
+        gross = float(body.get("gross_amount") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid numeric payload")
+    if roof_area <= 0:
+        raise HTTPException(status_code=400, detail="roof_area_m2 must be positive")
+    settings_doc = await db.settings.find_one({"id": "global"}, {"_id": 0}) or {}
+    cost_info = _compute_cost_and_margin(roof_area, gross, settings_doc)
+    commission_pct = float(settings_doc.get("commission_percent") or 50.0)
+    computed_commission = round(
+        max(0.0, cost_info["computed_margin"]) * (commission_pct / 100.0), 2
+    )
+    return {
+        **cost_info,
+        "commission_percent": commission_pct,
+        "computed_commission": computed_commission,
+        "is_negative": cost_info["computed_margin"] < 0,
+        "is_high_margin": cost_info["margin_pct_of_cost"] >= 50.0,
+    }
+
+
 @api.post("/contracts")
 async def create_contract(
     body: ContractIn,
@@ -1550,15 +1624,12 @@ async def create_contract(
         raise HTTPException(status_code=400, detail="Invalid financing_type (credit|cash)")
     if body.building_type not in ("mieszkalny", "gospodarczy"):
         raise HTTPException(status_code=400, detail="Invalid building_type")
-    if body.roof_area_m2 <= 0 or body.gross_amount <= 0 or body.global_margin < 0:
+    if body.roof_area_m2 <= 0 or body.gross_amount <= 0:
+        raise HTTPException(status_code=400, detail="Invalid numeric fields")
+    if body.global_margin is not None and body.global_margin < 0 and not body.allow_negative_margin:
         raise HTTPException(status_code=400, detail="Invalid numeric fields")
 
-    # K5: biznesowa spójność — marża, wpłata, transze
-    if body.global_margin > body.gross_amount:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Marża ({body.global_margin:.2f} PLN) nie może być większa niż cena brutto ({body.gross_amount:.2f} PLN).",
-        )
+    # K5: biznesowa spójność — wpłata, transze (marża będzie policzona auto niżej)
     if body.down_payment_amount is not None:
         if body.down_payment_amount < 0:
             raise HTTPException(status_code=400, detail="Wpłata własna nie może być ujemna.")
@@ -1615,12 +1686,63 @@ async def create_contract(
             return _serialize_contract(existing)
 
     settings_doc = await db.settings.find_one({"id": "global"}, {"_id": 0}) or {}
+
+    # ── Sprint 4.5 — Commission Fraud Prevention ────────────────────────────
+    # Firm cost is a server-owned truth (based on roof_area + settings.base_price_low/high).
+    # Handlowiec's global_margin input is IGNORED to prevent artificial margin inflation.
+    cost_info = _compute_cost_and_margin(
+        roof_area_m2=float(body.roof_area_m2),
+        gross_amount=float(body.gross_amount),
+        settings_doc=settings_doc,
+    )
+    computed_margin = float(cost_info["computed_margin"])
+
+    if computed_margin < 0:
+        if user["role"] == "handlowiec":
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "CONTRACT_NEGATIVE_MARGIN_REP",
+                    "message": (
+                        f"Cena ({body.gross_amount:.2f} PLN) jest niższa niż koszt firmy "
+                        f"({cost_info['firm_cost']:.2f} PLN). Marża wyszłaby "
+                        f"{computed_margin:.2f} PLN. Skontaktuj się z managerem."
+                    ),
+                    "cost_info": cost_info,
+                },
+            )
+        if not body.allow_negative_margin:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "CONTRACT_NEGATIVE_MARGIN_OVERRIDE_REQUIRED",
+                    "message": (
+                        f"Cena niższa niż koszt. Marża {computed_margin:.2f} PLN. "
+                        f"Potwierdź świadomą decyzję flagą allow_negative_margin=true."
+                    ),
+                    "cost_info": cost_info,
+                },
+            )
+
+    # Effective margin: handlowiec NEVER can override; manager/admin may.
+    if user["role"] == "handlowiec":
+        effective_margin = computed_margin
+        margin_override_by_role: Optional[str] = None
+    else:
+        if body.global_margin is not None:
+            effective_margin = float(body.global_margin)
+            margin_override_by_role = user["role"]
+        else:
+            effective_margin = computed_margin
+            margin_override_by_role = None
+    # ── /fraud prevention ───────────────────────────────────────────────────
+
     commission_pct = (
         float(body.commission_percent_override)
         if body.commission_percent_override is not None
         else float(settings_doc.get("commission_percent") or 50.0)
     )
-    commission_amount = round((commission_pct / 100.0) * float(body.global_margin), 2)
+    commission_amount = round((commission_pct / 100.0) * float(effective_margin), 2)
     total_paid = float(body.total_paid_amount or 0.0)
     if body.financing_type == "cash" and body.down_payment_amount is not None and total_paid <= 0:
         total_paid = float(body.down_payment_amount)
@@ -1638,7 +1760,14 @@ async def create_contract(
         "building_type": body.building_type,
         "roof_area_m2": float(body.roof_area_m2),
         "gross_amount": float(body.gross_amount),
-        "global_margin": float(body.global_margin),
+        "global_margin": float(effective_margin),
+        # Sprint 4.5 — audit trail for fraud prevention
+        "cost_per_m2": cost_info["cost_per_m2"],
+        "firm_cost": cost_info["firm_cost"],
+        "computed_margin": computed_margin,
+        "margin_pct_of_cost": cost_info["margin_pct_of_cost"],
+        "margin_override_by_role": margin_override_by_role,
+        "negative_margin_override": bool(body.allow_negative_margin and computed_margin < 0),
         "financing_type": body.financing_type,
         "down_payment_amount": float(body.down_payment_amount) if body.down_payment_amount is not None else None,
         "installments_count": int(body.installments_count) if body.installments_count is not None else None,
@@ -1681,6 +1810,10 @@ async def create_contract(
                 "gross_amount": doc.get("gross_amount"),
                 "commission_amount": doc.get("commission_amount"),
                 "signed_at": iso(doc.get("signed_at")),
+                # Sprint 4.5 — high-margin flag for extra-large confetti variant
+                "computed_margin": doc.get("computed_margin"),
+                "margin_pct_of_cost": doc.get("margin_pct_of_cost"),
+                "is_high_margin": (doc.get("margin_pct_of_cost") or 0) >= 50.0,
             },
         )
     except Exception as e:

@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -19,13 +19,27 @@ import { api, formatApiError } from "../../src/lib/api";
 import { fmtPln } from "../../src/lib/offerEngine";
 import { DateTimeField } from "../../src/components/DateTimeField";
 import { enqueueContract, isNetworkError } from "../../src/lib/offlineQueue";
+import { useAuth } from "../../src/lib/auth";
 
 type Financing = "credit" | "cash";
 type BuildingType = "mieszkalny" | "gospodarczy";
 
+// Sprint 4.5 — cost/margin preview (read-only, server-computed)
+interface CostPreview {
+  cost_per_m2: number;
+  firm_cost: number;
+  computed_margin: number;
+  margin_pct_of_cost: number;
+  commission_percent: number;
+  computed_commission: number;
+  is_negative: boolean;
+  is_high_margin: boolean;
+}
+
 export default function AddContract() {
   const params = useLocalSearchParams();
   const router = useRouter();
+  const { user } = useAuth();
   const leadId = String(params.leadId || "");
   const clientName = String(params.clientName || "");
   const preArea = String(params.area || "");
@@ -36,12 +50,20 @@ export default function AddContract() {
   const [buildingType, setBuildingType] = useState<BuildingType>(preType);
   const [roofArea, setRoofArea] = useState(preArea);
   const [grossAmount, setGrossAmount] = useState("");
-  const [globalMargin, setGlobalMargin] = useState("");
   const [financing, setFinancing] = useState<Financing>("credit");
   const [downPayment, setDownPayment] = useState("");
   const [installments, setInstallments] = useState("1");
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // Sprint 4.5 — live cost preview (server-owned math)
+  const [costPreview, setCostPreview] = useState<CostPreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [allowNegativeMargin, setAllowNegativeMargin] = useState(false);
+
+  const isManagerOrAdmin = user?.role === "manager" || user?.role === "admin";
+
   // K6: Idempotency key — stable for this form instance (retries use same key)
   const idempotencyKey = useRef<string>(
     `ctr-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
@@ -52,33 +74,72 @@ export default function AddContract() {
     return isFinite(n) ? n : def;
   };
 
-  const previewCommission = useMemo(() => {
-    // For preview we don't know commission_percent from server until load — but estimate at 50% since it's typical; actual is computed server-side.
-    const m = asNumber(globalMargin);
-    return Math.round(m * 0.5 * 100) / 100;
-  }, [globalMargin]);
+  // Debounced preview fetch (500ms after typing stops)
+  useEffect(() => {
+    const area = asNumber(roofArea);
+    const gross = asNumber(grossAmount);
+    if (area <= 0 || gross <= 0) {
+      setCostPreview(null);
+      setPreviewError(null);
+      return;
+    }
+    setPreviewError(null);
+    const t = setTimeout(async () => {
+      setPreviewLoading(true);
+      try {
+        const res = await api.post<CostPreview>("/contracts/preview-cost", {
+          roof_area_m2: area,
+          gross_amount: gross,
+        });
+        setCostPreview(res.data);
+      } catch (e) {
+        setCostPreview(null);
+        setPreviewError(formatApiError(e, "Nie udało się obliczyć marży"));
+      } finally {
+        setPreviewLoading(false);
+      }
+    }, 500);
+    return () => clearTimeout(t);
+  }, [roofArea, grossAmount]);
 
   const valid = useMemo(() => {
     const area = asNumber(roofArea);
     const gross = asNumber(grossAmount);
-    const margin = asNumber(globalMargin);
     const down = asNumber(downPayment);
-    return (
-      signedAt.length >= 10 &&
-      area > 0 &&
-      gross > 0 &&
-      margin >= 0 &&
-      margin <= gross &&
-      (financing === "credit" ||
-        (financing === "cash" && down >= 0 && down <= gross && asNumber(installments, 1) > 0))
-    );
-  }, [signedAt, roofArea, grossAmount, globalMargin, financing, downPayment, installments]);
+    if (!(signedAt.length >= 10 && area > 0 && gross > 0)) return false;
+    if (
+      financing === "cash" &&
+      !(down >= 0 && down <= gross && asNumber(installments, 1) > 0)
+    )
+      return false;
+    // Sprint 4.5 — negative margin gating
+    if (costPreview?.is_negative) {
+      if (!isManagerOrAdmin) return false; // rep blocked
+      if (!allowNegativeMargin) return false; // manager must tick the box
+    }
+    return true;
+  }, [
+    signedAt,
+    roofArea,
+    grossAmount,
+    financing,
+    downPayment,
+    installments,
+    costPreview,
+    isManagerOrAdmin,
+    allowNegativeMargin,
+  ]);
 
   const submit = async () => {
     if (!valid) {
       Alert.alert(
         "Błąd",
-        "Uzupełnij wszystkie wymagane pola z poprawnymi wartościami.\n\n• Marża nie może przekraczać ceny brutto\n• Wpłata własna nie może przekraczać ceny brutto"
+        "Uzupełnij wszystkie wymagane pola z poprawnymi wartościami." +
+          (costPreview?.is_negative && !isManagerOrAdmin
+            ? "\n\n⚠️ Cena niższa niż koszt firmy — skontaktuj się z managerem."
+            : costPreview?.is_negative
+            ? "\n\n⚠️ Zaznacz pole akceptacji marży ujemnej."
+            : "")
       );
       return;
     }
@@ -90,7 +151,11 @@ export default function AddContract() {
       building_type: buildingType,
       roof_area_m2: asNumber(roofArea),
       gross_amount: asNumber(grossAmount),
-      global_margin: asNumber(globalMargin),
+      // Sprint 4.5 — NOT sending global_margin for rep; server computes.
+      // Manager/admin with negative margin opt-in:
+      ...(isManagerOrAdmin && costPreview?.is_negative && allowNegativeMargin
+        ? { allow_negative_margin: true }
+        : {}),
       financing_type: financing,
       note: note || undefined,
     };
@@ -107,13 +172,25 @@ export default function AddContract() {
       Alert.alert(
         "Umowa dodana",
         `Prowizja: ${fmtPln(res.data.commission_amount || 0)}\nStatus: ${
-          res.data.status === "frozen" ? `ZAMROŻONA na ${res.data.days_until_release} dni` : res.data.status
+          res.data.status === "frozen"
+            ? `ZAMROŻONA na ${res.data.days_until_release} dni`
+            : res.data.status
         }`,
         [{ text: "OK", onPress: () => router.back() }]
       );
     } catch (e: any) {
-      // Sprint 1.5 — network-level failures fall back to the offline queue.
-      if (isNetworkError(e)) {
+      // Sprint 4.5 — new structured 400 codes from fraud guard
+      const detail = e?.response?.data?.detail;
+      if (
+        e?.response?.status === 400 &&
+        detail &&
+        typeof detail === "object" &&
+        (detail.code === "CONTRACT_NEGATIVE_MARGIN_REP" ||
+          detail.code === "CONTRACT_NEGATIVE_MARGIN_OVERRIDE_REQUIRED")
+      ) {
+        Alert.alert("Marża ujemna", String(detail.message || "Cena niższa niż koszt"));
+      } else if (isNetworkError(e)) {
+        // Sprint 1.5 — network-level failures fall back to the offline queue.
         try {
           await enqueueContract(body);
           Alert.alert(
@@ -122,7 +199,10 @@ export default function AddContract() {
             [{ text: "OK", onPress: () => router.back() }]
           );
         } catch (enqErr) {
-          Alert.alert("Błąd zapisu", formatApiError(enqErr, "Nie udało się zapisać lokalnie"));
+          Alert.alert(
+            "Błąd zapisu",
+            formatApiError(enqErr, "Nie udało się zapisać lokalnie")
+          );
         }
       } else {
         Alert.alert("Błąd zapisu", formatApiError(e));
@@ -210,20 +290,99 @@ export default function AddContract() {
           <Text style={styles.label}>Cena brutto umowy (PLN) *</Text>
           <TextInput style={styles.input} value={grossAmount} onChangeText={setGrossAmount} keyboardType="decimal-pad" placeholder="np. 65000" placeholderTextColor={colors.textSecondary} testID="contract-gross-amount" />
 
-          <Text style={styles.label}>Marża globalna (PLN) *</Text>
-          <TextInput
-            style={[styles.input, styles.inputHighlight]}
-            value={globalMargin}
-            onChangeText={setGlobalMargin}
-            keyboardType="decimal-pad"
-            placeholder="np. 12000"
-            placeholderTextColor={colors.textSecondary}
-            testID="contract-global-margin"
-          />
-          <Text style={styles.hint}>
-            Na tej kwocie liczona jest prowizja handlowca. Przybliżenie: ~{fmtPln(previewCommission)} (przy 50%).
-            Rzeczywisty % wg ustawień Admina.
-          </Text>
+          {/* Sprint 4.5 — read-only widget: marża i prowizja liczone przez backend */}
+          <View
+            style={[
+              styles.marginCard,
+              costPreview?.is_high_margin && styles.marginCardHigh,
+              costPreview?.is_negative && styles.marginCardNeg,
+            ]}
+            testID="contract-cost-widget"
+          >
+            <Text style={styles.marginCardTitle}>
+              {costPreview?.is_high_margin
+                ? "🎉 Wysoka marża!"
+                : costPreview?.is_negative
+                ? "⚠️ Cena niższa niż koszt"
+                : "Automatyczne wyliczenia (serwer)"}
+            </Text>
+            {previewLoading ? (
+              <View style={{ padding: 12, alignItems: "center" }}>
+                <ActivityIndicator color={colors.secondary} />
+              </View>
+            ) : !costPreview ? (
+              <Text style={styles.marginHint}>
+                {previewError
+                  ? previewError
+                  : "Wpisz metraż i cenę — obliczę koszt firmy, marżę i Twoją prowizję."}
+              </Text>
+            ) : (
+              <View style={{ gap: 4 }}>
+                <View style={styles.marginRow}>
+                  <Text style={styles.marginLabel}>Stawka firmy</Text>
+                  <Text style={styles.marginValue}>
+                    {costPreview.cost_per_m2.toFixed(0)} PLN/m²
+                    {asNumber(roofArea) >= 200 ? " (≥200 m²)" : " (<200 m²)"}
+                  </Text>
+                </View>
+                <View style={styles.marginRow}>
+                  <Text style={styles.marginLabel}>Koszt firmy</Text>
+                  <Text style={styles.marginValue} testID="preview-firm-cost">
+                    {fmtPln(costPreview.firm_cost)}
+                  </Text>
+                </View>
+                <View style={styles.marginRow}>
+                  <Text style={styles.marginLabel}>Marża firmy</Text>
+                  <Text
+                    style={[
+                      styles.marginValueStrong,
+                      costPreview.is_negative && { color: colors.error },
+                      costPreview.is_high_margin && { color: colors.success },
+                    ]}
+                    testID="preview-computed-margin"
+                  >
+                    {fmtPln(costPreview.computed_margin)}
+                    {" · "}
+                    {costPreview.margin_pct_of_cost.toFixed(1)}% kosztu
+                  </Text>
+                </View>
+                <View style={styles.marginRow}>
+                  <Text style={styles.marginLabel}>Twoja prowizja</Text>
+                  <Text
+                    style={styles.commissionValue}
+                    testID="preview-commission"
+                  >
+                    {fmtPln(costPreview.computed_commission)}{" "}
+                    <Text style={styles.marginLabel}>
+                      ({costPreview.commission_percent.toFixed(0)}% marży)
+                    </Text>
+                  </Text>
+                </View>
+                {costPreview.is_negative && !isManagerOrAdmin && (
+                  <Text style={styles.blockText}>
+                    🔒 Zapis zablokowany. Skontaktuj się z managerem przed podpisaniem.
+                  </Text>
+                )}
+                {costPreview.is_negative && isManagerOrAdmin && (
+                  <TouchableOpacity
+                    onPress={() => setAllowNegativeMargin((v) => !v)}
+                    style={styles.allowNegRow}
+                    testID="contract-allow-negative-margin"
+                    activeOpacity={0.7}
+                  >
+                    <Feather
+                      name={allowNegativeMargin ? "check-square" : "square"}
+                      size={16}
+                      color={allowNegativeMargin ? colors.error : colors.textSecondary}
+                    />
+                    <Text style={styles.allowNegText}>
+                      Świadomie akceptuję marżę ujemną (np. klient VIP / pierwsza instalacja)
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+          </View>
 
           <Text style={styles.label}>Typ finansowania *</Text>
           <View style={styles.segRow}>
@@ -299,6 +458,20 @@ const styles = StyleSheet.create({
   label: { fontSize: 10, color: colors.textSecondary, fontWeight: "800", textTransform: "uppercase", letterSpacing: 1, marginTop: 14, marginBottom: 6 },
   input: { borderWidth: 1.5, borderColor: colors.border, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 12, fontSize: 15, fontWeight: "700", color: colors.textPrimary, backgroundColor: colors.paper },
   inputHighlight: { borderColor: colors.secondary, backgroundColor: "#F0FDF4" },
+  // Sprint 4.5 — cost/margin widget
+  marginCard: { marginTop: 16, backgroundColor: colors.paper, borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, padding: 14 },
+  marginCardHigh: { backgroundColor: "#FFFBEB", borderColor: "#F59E0B", borderWidth: 2 },
+  marginCardNeg: { backgroundColor: "#FEF2F2", borderColor: colors.error, borderWidth: 2 },
+  marginCardTitle: { fontSize: 13, fontWeight: "900", color: colors.textPrimary, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 },
+  marginRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 4 },
+  marginLabel: { fontSize: 12, color: colors.textSecondary },
+  marginValue: { fontSize: 13, fontWeight: "700", color: colors.textPrimary },
+  marginValueStrong: { fontSize: 14, fontWeight: "900", color: colors.textPrimary },
+  commissionValue: { fontSize: 15, fontWeight: "900", color: colors.success },
+  marginHint: { fontSize: 12, color: colors.textSecondary, fontStyle: "italic" },
+  blockText: { marginTop: 10, fontSize: 12, color: colors.error, fontWeight: "800" },
+  allowNegRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 10, padding: 8, borderWidth: 1, borderColor: colors.error, borderRadius: radius.sm, backgroundColor: "#FFF" },
+  allowNegText: { flex: 1, fontSize: 12, color: colors.textPrimary, fontWeight: "700" },
   hint: { fontSize: 11, color: colors.textSecondary, marginTop: 4, lineHeight: 15 },
   quickRow: { flexDirection: "row", gap: 6, marginTop: 8 },
   chip: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.paper },

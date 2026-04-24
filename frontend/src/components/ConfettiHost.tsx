@@ -39,6 +39,10 @@ interface ContractSignedEvent extends AppEvent {
   gross_amount?: number;
   commission_amount?: number;
   signed_at?: string;
+  // Sprint 4.5 — high-margin flag for extra-large confetti variant
+  computed_margin?: number;
+  margin_pct_of_cost?: number;
+  is_high_margin?: boolean;
 }
 
 export const ConfettiHost: React.FC = () => {
@@ -64,19 +68,25 @@ export const ConfettiHost: React.FC = () => {
       setEvent(evt);
       setVisible(true);
       const isMine = !!user && evt.rep_id === user.id;
+      const isHighMargin = evt.is_high_margin === true;
       if (isMine && Platform.OS !== "web") {
         try {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+          // Sprint 4.5 — second pulse for high-margin mega celebration
+          if (isHighMargin) {
+            setTimeout(() => {
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+            }, 500);
+          }
         } catch {}
       }
       if (dismissTimer.current) clearTimeout(dismissTimer.current);
-      dismissTimer.current = setTimeout(
-        () => {
-          setVisible(false);
-          setEvent(null);
-        },
-        isMine ? 5200 : 3600
-      );
+      // Mine + high-margin → 6s; mine → 5.2s; other → 3.6s
+      const ttl = isMine && isHighMargin ? 6200 : isMine ? 5200 : 3600;
+      dismissTimer.current = setTimeout(() => {
+        setVisible(false);
+        setEvent(null);
+      }, ttl);
     });
     return () => {
       unsub();
@@ -87,10 +97,21 @@ export const ConfettiHost: React.FC = () => {
   if (!visible || !event) return null;
 
   const isMine = !!user && event.rep_id === user.id;
+  const isHighMargin = event.is_high_margin === true;
 
-  const cannonProps = isMine
+  // Sprint 4.5 — three variants: MINE_HIGH / MINE / OTHER
+  const cannonProps = isMine && isHighMargin
+    ? { count: 400, origin: { x: width / 2, y: -10 }, fadeOut: true, fallSpeed: 2800 }
+    : isMine
     ? { count: 200, origin: { x: width / 2, y: -10 }, fadeOut: true, fallSpeed: 2600 }
     : { count: 60, origin: { x: width / 2, y: -10 }, fadeOut: true, fallSpeed: 2400 };
+  const explosionSpeed = isMine && isHighMargin ? 450 : isMine ? 350 : 300;
+  const marginPct = typeof event.margin_pct_of_cost === "number" ? Math.round(event.margin_pct_of_cost) : null;
+
+  // Sprint 3a fix — gender agreement via template literal (not JSX text nodes)
+  const otherTitle = `${event.rep_name || "Handlowiec"} właśnie podpisał${
+    event.rep_name && /[aA]$/.test(event.rep_name) ? "a" : ""
+  } umowę!`;
 
   return (
     <Modal
@@ -101,16 +122,34 @@ export const ConfettiHost: React.FC = () => {
       statusBarTranslucent
     >
       <Pressable onPress={dismiss} style={styles.backdrop} testID="confetti-backdrop">
-        {/* Confetti cannon always fires on mount (new key per event forces re-fire) */}
         <ConfettiCannon
           ref={cannonRef}
           key={event.contract_id || String(Date.now())}
           {...cannonProps}
           autoStart
-          explosionSpeed={350}
+          explosionSpeed={explosionSpeed}
         />
 
-        {isMine ? (
+        {isMine && isHighMargin ? (
+          <View style={[styles.bannerBase, styles.bannerMega]} testID="confetti-banner-mega">
+            <Text style={styles.megaEmoji}>🔥 🎉 🔥</Text>
+            <Text style={styles.bannerTitleMega}>MEGA UMOWA!</Text>
+            <View style={styles.bannerSepLarge} />
+            <Text style={styles.bannerClient}>
+              {event.client_name || "—"}
+              {typeof event.gross_amount === "number" ? ` · ${fmtPln(event.gross_amount)}` : ""}
+            </Text>
+            {marginPct !== null && (
+              <Text style={styles.marginBadge}>Marża {marginPct}% powyżej kosztu!</Text>
+            )}
+            {typeof event.commission_amount === "number" && (
+              <Text style={styles.bannerCommissionMega}>
+                Twoja prowizja: {fmtPln(event.commission_amount)}
+              </Text>
+            )}
+            <Text style={styles.bannerHint}>[tap aby zamknąć]</Text>
+          </View>
+        ) : isMine ? (
           <View style={[styles.bannerBase, styles.bannerLarge]} testID="confetti-banner-mine">
             <Text style={styles.bigEmoji}>🎉</Text>
             <Text style={styles.bannerTitleLarge}>BRAWO! Podpisałeś umowę! 🎉</Text>
@@ -131,11 +170,7 @@ export const ConfettiHost: React.FC = () => {
             <View style={styles.bannerSmallRow}>
               <Text style={styles.smallEmoji}>🎊</Text>
               <View style={{ flex: 1 }}>
-                <Text style={styles.bannerTitleSmall}>
-                  {event.rep_name || "Handlowiec"} właśnie podpisał{" "}
-                  {event.rep_name && /[aA]$/.test(event.rep_name) ? "a" : ""}
-                  {" "}umowę!
-                </Text>
+                <Text style={styles.bannerTitleSmall}>{otherTitle}</Text>
                 <Text style={styles.bannerClientSmall}>
                   {event.client_name || "—"}
                   {typeof event.gross_amount === "number"
@@ -177,6 +212,37 @@ const styles = StyleSheet.create({
     maxWidth: 420,
     alignItems: "center",
     gap: 6,
+  },
+  // Sprint 4.5 — mega (mine + high-margin) variant
+  bannerMega: {
+    width: "100%",
+    maxWidth: 460,
+    alignItems: "center",
+    gap: 6,
+    borderWidth: 3,
+    borderColor: "#F59E0B",
+    backgroundColor: "#FFFBEB",
+  },
+  megaEmoji: { fontSize: 46, letterSpacing: 6, marginBottom: 2 },
+  bannerTitleMega: {
+    fontSize: 22,
+    fontWeight: "900",
+    color: "#B45309",
+    textAlign: "center",
+    letterSpacing: 1,
+  },
+  marginBadge: {
+    marginTop: 6,
+    fontSize: 13,
+    color: "#B45309",
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  bannerCommissionMega: {
+    marginTop: 8,
+    fontSize: 16,
+    color: colors.success,
+    fontWeight: "900",
   },
   bannerSmall: {
     position: "absolute",

@@ -1798,3 +1798,323 @@ class TestContractSignedEvent:
         assert "id" in r.json()
         self._cleanup()
 
+
+
+# ============ SPRINT 4.5 — COMMISSION FRAUD PREVENTION ============
+
+
+class TestCommissionFraudPrevention:
+    """Server must own the margin calculation. Handlowiec input for global_margin
+    is IGNORED. Negative margin requires explicit manager/admin override."""
+
+    BASE_LAT = 51.4100
+    BASE_LNG = 22.4100
+
+    def _photo(self):
+        return "iVBORw0KGgo" + "A" * 200
+
+    def _cleanup(self):
+        import pymongo
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        try:
+            mc["oze_crm"]["leads"].delete_many({"client_name": {"$regex": "^Fraud_"}})
+            mc["oze_crm"]["contracts"].delete_many({"client_name": {"$regex": "^Fraud_"}})
+        finally:
+            mc.close()
+
+    def _create_signed_lead(self, api_client, rep_token, jitter):
+        import uuid
+        payload = {
+            "client_name": f"Fraud_Lead_{uuid.uuid4().hex[:6]}",
+            "latitude": self.BASE_LAT + jitter * 0.001,
+            "longitude": self.BASE_LNG + jitter * 0.001,
+            "status": "umowione",
+            "meeting_at": "2026-04-25T10:00:00",
+            "photo_base64": self._photo(),
+        }
+        r = api_client.post(
+            f"{BASE_URL}/api/leads",
+            json=payload,
+            headers={"Authorization": f"Bearer {rep_token}"},
+        )
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    # ── Auto-compute for small roof (<200 m²) ───────────────────────────────
+    def test_margin_auto_computed_small_roof(self, api_client, rep_token):
+        self._cleanup()
+        lead = self._create_signed_lead(api_client, rep_token, jitter=1)
+        # 100 m² * 275 = 27500 firm_cost; gross 40000 → margin 12500
+        body = {
+            "lead_id": lead["id"],
+            "signed_at": "2026-04-23",
+            "buildings_count": 1,
+            "building_type": "mieszkalny",
+            "roof_area_m2": 100.0,
+            "gross_amount": 40000.0,
+            "global_margin": 99999.0,  # attempt to inflate — MUST be ignored
+            "financing_type": "cash",
+            "down_payment_amount": 40000.0,
+            "installments_count": 1,
+            "total_paid_amount": 40000.0,
+        }
+        r = api_client.post(
+            f"{BASE_URL}/api/contracts",
+            json=body,
+            headers={"Authorization": f"Bearer {rep_token}"},
+        )
+        assert r.status_code == 200, r.text
+        c = r.json()
+        assert c["firm_cost"] == 27500.0
+        assert c["cost_per_m2"] == 275.0
+        assert c["computed_margin"] == 12500.0
+        # global_margin stored reflects computed value (handlowiec ignored)
+        assert c["global_margin"] == 12500.0
+        # commission 50% * 12500 = 6250
+        assert c["commission_amount"] == 6250.0
+        self._cleanup()
+
+    # ── Auto-compute for large roof (≥200 m²) ───────────────────────────────
+    def test_margin_auto_computed_large_roof(self, api_client, rep_token):
+        self._cleanup()
+        lead = self._create_signed_lead(api_client, rep_token, jitter=2)
+        # 250 m² * 200 = 50000 firm_cost; gross 60000 → margin 10000
+        body = {
+            "lead_id": lead["id"],
+            "signed_at": "2026-04-23",
+            "buildings_count": 1,
+            "building_type": "mieszkalny",
+            "roof_area_m2": 250.0,
+            "gross_amount": 60000.0,
+            "financing_type": "cash",
+            "down_payment_amount": 60000.0,
+            "installments_count": 1,
+            "total_paid_amount": 60000.0,
+        }
+        r = api_client.post(
+            f"{BASE_URL}/api/contracts",
+            json=body,
+            headers={"Authorization": f"Bearer {rep_token}"},
+        )
+        assert r.status_code == 200, r.text
+        c = r.json()
+        assert c["cost_per_m2"] == 200.0
+        assert c["firm_cost"] == 50000.0
+        assert c["computed_margin"] == 10000.0
+        assert c["commission_amount"] == 5000.0
+        self._cleanup()
+
+    # ── Handlowiec cannot inflate margin ────────────────────────────────────
+    def test_handlowiec_cannot_override_margin(self, api_client, rep_token):
+        """Sending global_margin=99999 as handlowiec → ignored, server math used."""
+        self._cleanup()
+        lead = self._create_signed_lead(api_client, rep_token, jitter=3)
+        body = {
+            "lead_id": lead["id"],
+            "signed_at": "2026-04-23",
+            "buildings_count": 1,
+            "building_type": "mieszkalny",
+            "roof_area_m2": 150.0,
+            "gross_amount": 55000.0,
+            "global_margin": 99999.99,  # attempt artificial inflation
+            "financing_type": "cash",
+            "down_payment_amount": 55000.0,
+            "installments_count": 1,
+            "total_paid_amount": 55000.0,
+        }
+        r = api_client.post(
+            f"{BASE_URL}/api/contracts",
+            json=body,
+            headers={"Authorization": f"Bearer {rep_token}"},
+        )
+        assert r.status_code == 200, r.text
+        c = r.json()
+        # firm_cost = 150 * 275 = 41250; margin = 55000 - 41250 = 13750
+        assert c["firm_cost"] == 41250.0
+        assert c["computed_margin"] == 13750.0
+        assert c["global_margin"] == 13750.0, f"Expected auto-computed margin, got {c['global_margin']}"
+        assert c["margin_override_by_role"] is None
+        # Commission must be 50% of computed margin, NOT the inflated value
+        assert c["commission_amount"] == 6875.0
+        self._cleanup()
+
+    # ── Negative margin blocks handlowiec ───────────────────────────────────
+    def test_negative_margin_blocks_handlowiec(self, api_client, rep_token):
+        self._cleanup()
+        lead = self._create_signed_lead(api_client, rep_token, jitter=4)
+        body = {
+            "lead_id": lead["id"],
+            "signed_at": "2026-04-23",
+            "buildings_count": 1,
+            "building_type": "mieszkalny",
+            "roof_area_m2": 200.0,  # cost 40000 at 200 PLN/m²
+            "gross_amount": 30000.0,  # < cost → negative
+            "financing_type": "cash",
+            "down_payment_amount": 30000.0,
+            "installments_count": 1,
+            "total_paid_amount": 30000.0,
+        }
+        r = api_client.post(
+            f"{BASE_URL}/api/contracts",
+            json=body,
+            headers={"Authorization": f"Bearer {rep_token}"},
+        )
+        assert r.status_code == 400, r.text
+        detail = r.json()["detail"]
+        assert isinstance(detail, dict)
+        assert detail.get("code") == "CONTRACT_NEGATIVE_MARGIN_REP"
+        assert "cost_info" in detail
+        self._cleanup()
+
+    # ── Negative margin requires allow_negative_margin for manager/admin ────
+    def test_negative_margin_requires_override_manager(self, api_client, admin_token, rep_token):
+        self._cleanup()
+        lead = self._create_signed_lead(api_client, rep_token, jitter=5)
+        body = {
+            "lead_id": lead["id"],
+            "signed_at": "2026-04-23",
+            "buildings_count": 1,
+            "building_type": "mieszkalny",
+            "roof_area_m2": 200.0,
+            "gross_amount": 30000.0,
+            "financing_type": "cash",
+            "down_payment_amount": 30000.0,
+            "installments_count": 1,
+            "total_paid_amount": 30000.0,
+            # No allow_negative_margin
+        }
+        r = api_client.post(
+            f"{BASE_URL}/api/contracts",
+            json=body,
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert r.status_code == 400, r.text
+        assert r.json()["detail"]["code"] == "CONTRACT_NEGATIVE_MARGIN_OVERRIDE_REQUIRED"
+        self._cleanup()
+
+    # ── Negative margin works with allow_negative_margin + admin ────────────
+    def test_negative_margin_succeeds_with_override(self, api_client, admin_token, rep_token):
+        self._cleanup()
+        lead = self._create_signed_lead(api_client, rep_token, jitter=6)
+        body = {
+            "lead_id": lead["id"],
+            "signed_at": "2026-04-23",
+            "buildings_count": 1,
+            "building_type": "mieszkalny",
+            "roof_area_m2": 200.0,
+            "gross_amount": 30000.0,
+            "allow_negative_margin": True,
+            "financing_type": "cash",
+            "down_payment_amount": 30000.0,
+            "installments_count": 1,
+            "total_paid_amount": 30000.0,
+        }
+        r = api_client.post(
+            f"{BASE_URL}/api/contracts",
+            json=body,
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert r.status_code == 200, r.text
+        c = r.json()
+        assert c["computed_margin"] == -10000.0
+        assert c["negative_margin_override"] is True
+        # Commission is MAX(0, margin) * pct in backend? Actually our code uses
+        # effective_margin which will be -10000; commission = -5000.
+        # That matches the business intent: negative margin ⇒ negative commission audit trail.
+        assert c["commission_amount"] == -5000.0
+        self._cleanup()
+
+    # ── Preview endpoint ────────────────────────────────────────────────────
+    def test_preview_endpoint(self, api_client, rep_token):
+        r = api_client.post(
+            f"{BASE_URL}/api/contracts/preview-cost",
+            json={"roof_area_m2": 100.0, "gross_amount": 50000.0},
+            headers={"Authorization": f"Bearer {rep_token}"},
+        )
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["cost_per_m2"] == 275.0
+        assert d["firm_cost"] == 27500.0
+        assert d["computed_margin"] == 22500.0
+        assert d["is_high_margin"] is True
+        assert d["is_negative"] is False
+        assert d["commission_percent"] == 50.0
+        assert d["computed_commission"] == 11250.0
+
+    # ── is_high_margin flag in broadcast payload ────────────────────────────
+    def test_high_margin_flag_in_broadcast(self, api_client, rep_token):
+        """POST /contracts with high-margin contract — event payload reflects it.
+        Connects to /ws/events and verifies the contract_signed frame."""
+        try:
+            import websocket  # type: ignore
+        except ImportError:
+            pytest.skip("websocket-client not installed")
+        import json as _json
+        import threading
+        self._cleanup()
+        lead = self._create_signed_lead(api_client, rep_token, jitter=7)
+
+        received = []
+        connected_evt = threading.Event()
+        auth_ok_evt = threading.Event()
+        event_evt = threading.Event()
+
+        def on_message(wsapp, message):
+            try:
+                m = _json.loads(message)
+            except Exception:
+                return
+            if m.get("type") == "auth_ok":
+                auth_ok_evt.set()
+                return
+            if m.get("type") == "contract_signed":
+                received.append(m)
+                event_evt.set()
+
+        def on_open(wsapp):
+            connected_evt.set()
+            wsapp.send(_json.dumps({"token": rep_token}))
+
+        wsapp = websocket.WebSocketApp(
+            "ws://localhost:8001/ws/events",
+            on_open=on_open,
+            on_message=on_message,
+            on_error=lambda *_: None,
+        )
+        thr = threading.Thread(target=wsapp.run_forever, daemon=True)
+        thr.start()
+
+        assert connected_evt.wait(timeout=5)
+        assert auth_ok_evt.wait(timeout=5)
+
+        # 100 m² * 275 = 27500 cost; gross 50000 → margin 22500 (81.8% → high)
+        body = {
+            "lead_id": lead["id"],
+            "signed_at": "2026-04-23",
+            "buildings_count": 1,
+            "building_type": "mieszkalny",
+            "roof_area_m2": 100.0,
+            "gross_amount": 50000.0,
+            "financing_type": "cash",
+            "down_payment_amount": 50000.0,
+            "installments_count": 1,
+            "total_paid_amount": 50000.0,
+        }
+        r = api_client.post(
+            f"{BASE_URL}/api/contracts",
+            json=body,
+            headers={"Authorization": f"Bearer {rep_token}"},
+        )
+        assert r.status_code == 200, r.text
+
+        assert event_evt.wait(timeout=5), f"no event frame. received={received}"
+        try:
+            wsapp.close()
+        except Exception:
+            pass
+        e = received[0]
+        assert e.get("is_high_margin") is True
+        assert e.get("margin_pct_of_cost") is not None and float(e["margin_pct_of_cost"]) >= 50.0
+        assert e.get("computed_margin") == 22500.0
+        self._cleanup()
+
