@@ -22,6 +22,11 @@ export const colors = {
   zinc100: "#F1F5F9",
   zinc200: "#E2E8F0",
   zinc300: "#CBD5E1",
+
+  // Sprint 4 — rep activity status (active / idle / offline)
+  activeStatus: "#22C55E", // green-500 — distinct from brand secondary/podpisana
+  idleStatus: "#EAB308",   // yellow-500
+  offlineStatus: "#94A3B8", // slate-400
 };
 
 // Lead status palette — fits the OZE brand (blue/green/amber/slate)

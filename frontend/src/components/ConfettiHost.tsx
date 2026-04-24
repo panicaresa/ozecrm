@@ -202,10 +202,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     elevation: 8,
-    shadowColor: "#000",
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
+    // Sprint 4 cosmetic — modern box-shadow
+    boxShadow: "0px 4px 12px rgba(0,0,0,0.15)",
   },
   bannerLarge: {
     width: "100%",

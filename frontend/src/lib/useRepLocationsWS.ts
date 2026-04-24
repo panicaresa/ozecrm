@@ -1,7 +1,7 @@
 // WebSocket hook for live rep-locations (Faza 2.0)
 import { useEffect, useRef, useState } from "react";
 import Constants from "expo-constants";
-import * as SecureStore from "expo-secure-store";
+import { getToken } from "./api";
 
 export interface LiveLocation {
   rep_id: string;
@@ -51,7 +51,7 @@ export function useRepLocationsWS(enabled: boolean = true): {
         setStatus((s) => ({ ...s, error: "Missing EXPO_PUBLIC_BACKEND_URL" }));
         return;
       }
-      const token = await SecureStore.getItemAsync("oze_token");
+      const token = await getToken();
       if (!token) {
         setStatus((s) => ({ ...s, error: "No auth token" }));
         return;

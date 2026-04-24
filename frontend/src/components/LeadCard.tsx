@@ -67,10 +67,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.zinc100,
     gap: 6,
-    shadowColor: "#000",
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
+    // Sprint 4 cosmetic — modern box-shadow for web, elevation for Android
+    boxShadow: "0px 2px 6px rgba(0,0,0,0.04)",
     elevation: 1,
   },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },

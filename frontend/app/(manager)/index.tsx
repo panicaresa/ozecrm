@@ -24,6 +24,11 @@ import { QueueBadge } from "../../src/components/QueueBadge";
 import { CommissionCalculator } from "../../src/components/CommissionCalculator";
 import { DailyReportWidget } from "../../src/components/DailyReportWidget";
 import { useRepLocationsWS } from "../../src/lib/useRepLocationsWS";
+import {
+  useRepActivity,
+  getActivityColor,
+  getActivityLabel,
+} from "../../src/lib/useRepActivity";
 import { Lead } from "../../src/components/LeadCard";
 
 interface Dashboard {
@@ -49,6 +54,13 @@ export default function ManagerDashboard() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedPinId, setSelectedPinId] = useState<string | null>(null);
   const [selectedRepId, setSelectedRepId] = useState<string | null>(null);
+  // Sprint 4 — poll rep activity every 60s; data is keyed by rep_id.
+  const { data: activityData } = useRepActivity(true, 60_000);
+  const activityByRepId = React.useMemo(() => {
+    const m = new Map<string, (typeof activityData)[number]>();
+    activityData.forEach((a) => m.set(a.rep_id, a));
+    return m;
+  }, [activityData]);
   const [layers, setLayers] = useState({ leads: true, reps: true });
   // Faza 2.0: Live WebSocket feed for reps (supplements the 30s polling)
   const ws = useRepLocationsWS(true);
@@ -358,6 +370,62 @@ export default function ManagerDashboard() {
             </Text>
           </View>
 
+          {/* Sprint 4 — status filter chips (filters map + drilldown via filterStatus) */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.statusFilterRow}
+            testID="status-filter-chips"
+          >
+            <TouchableOpacity
+              onPress={() => { setFilterStatus(null); setSelectedPinId(null); }}
+              style={[styles.statusChip, !filterStatus && styles.statusChipActive]}
+              activeOpacity={0.85}
+              testID="status-chip-all"
+            >
+              <Text
+                style={[
+                  styles.statusChipText,
+                  !filterStatus && { color: "#fff" },
+                ]}
+              >
+                Wszystkie ({(data?.pins || []).length})
+              </Text>
+            </TouchableOpacity>
+            {(["nowy", "umowione", "decyzja", "podpisana", "nie_zainteresowany"] as const).map((s) => {
+              const count = (data?.pins || []).filter((p: any) => p.status === s).length;
+              const active = filterStatus === s;
+              const sc = statusColor[s] || colors.textSecondary;
+              return (
+                <TouchableOpacity
+                  key={s}
+                  onPress={() => { setFilterStatus(active ? null : s); setSelectedPinId(null); }}
+                  style={[
+                    styles.statusChip,
+                    active && { backgroundColor: sc, borderColor: sc },
+                  ]}
+                  activeOpacity={0.85}
+                  testID={`status-chip-${s}`}
+                >
+                  <View
+                    style={[
+                      styles.statusChipDot,
+                      { backgroundColor: active ? "#fff" : sc },
+                    ]}
+                  />
+                  <Text
+                    style={[
+                      styles.statusChipText,
+                      active && { color: "#fff" },
+                    ]}
+                  >
+                    {statusLabel[s]} ({count})
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+
           {/* Prominent layer toggles ABOVE the map — clearly visible */}
           <View style={styles.layerBar}>
             <TouchableOpacity
@@ -422,17 +490,29 @@ export default function ManagerDashboard() {
         {selectedRepId && (() => {
           const r = (data?.reps_live || []).find((x: any) => x.user_id === selectedRepId);
           if (!r) return null;
+          const act = activityByRepId.get(r.user_id);
+          const actStatus = act?.status || r.activity_status;
+          const actMins = act?.minutes_ago ?? r.activity_minutes_ago;
+          const dotColor = getActivityColor(actStatus, colors);
           return (
             <View style={styles.sectionCard} testID="rep-callout">
               <View style={styles.sectionHead}>
-                <Text style={styles.sectionTitle}>{r.name}</Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1 }}>
+                  <View style={[styles.activityDot, { backgroundColor: dotColor }]} testID="rep-activity-dot" />
+                  <Text style={styles.sectionTitle}>{r.name}</Text>
+                </View>
                 <TouchableOpacity onPress={() => setSelectedRepId(null)}>
                   <Feather name="x" size={18} color={colors.textSecondary} />
                 </TouchableOpacity>
               </View>
               <Text style={{ color: colors.textSecondary, fontSize: 13 }}>
-                {r.active ? "Aktywny w terenie" : "Offline"} · ostatnia pozycja {r.lat?.toFixed?.(4)}, {r.lng?.toFixed?.(4)}
+                {getActivityLabel(actStatus)}
+                {typeof actMins === "number" && actMins >= 0 ? ` · ${actMins} min temu` : ""}
+                {r.active ? " · w terenie" : ""}
                 {typeof r.battery === "number" ? ` · 🔋 ${Math.round(r.battery * 100)}%` : ""}
+              </Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 2 }}>
+                pos: {r.lat?.toFixed?.(4)}, {r.lng?.toFixed?.(4)}
               </Text>
             </View>
           );
@@ -549,4 +629,42 @@ const styles = StyleSheet.create({
   layerToggle: { flex: 1, flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 12, paddingHorizontal: 12, borderRadius: radius.md, borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.paper },
   layerCheckbox: { width: 18, height: 18, borderRadius: 4, borderWidth: 1.5, borderColor: colors.border, alignItems: "center", justifyContent: "center", backgroundColor: "transparent" },
   layerText: { flex: 1, fontSize: 12, fontWeight: "800", color: colors.textPrimary, letterSpacing: 0.3 },
+
+  // Sprint 4 — status filter chips (above LeadMap)
+  statusFilterRow: {
+    flexDirection: "row",
+    gap: 8,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.sm,
+  },
+  statusChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.bg,
+  },
+  statusChipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  statusChipDot: { width: 8, height: 8, borderRadius: 4 },
+  statusChipText: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: colors.textPrimary,
+    letterSpacing: 0.2,
+  },
+  // Rep activity dot used in the rep-callout
+  activityDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    borderWidth: 1.5,
+    borderColor: colors.paper,
+  },
 });

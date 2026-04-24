@@ -3,7 +3,7 @@
 // Location.startLocationUpdatesAsync with background permission.
 import * as TaskManager from "expo-task-manager";
 import * as Location from "expo-location";
-import * as SecureStore from "expo-secure-store";
+import { getToken } from "./api";
 import Constants from "expo-constants";
 
 export const BACKGROUND_LOCATION_TASK = "oze-crm-background-location";
@@ -26,7 +26,7 @@ TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
   const { locations } = data as { locations: Location.LocationObject[] };
   if (!locations || locations.length === 0) return;
 
-  const token = await SecureStore.getItemAsync("oze_token");
+  const token = await getToken();
   if (!token) return;
 
   const backend = getBackendUrl();

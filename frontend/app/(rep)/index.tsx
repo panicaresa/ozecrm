@@ -306,7 +306,7 @@ const styles = StyleSheet.create({
   workLabelRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   pulseDot: { width: 8, height: 8, borderRadius: 4 },
   workLabel: { color: colors.textInverseSecondary, fontSize: 11, fontWeight: "900", letterSpacing: 2 },
-  workBtn: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 20, paddingHorizontal: 32, borderRadius: 999, marginVertical: 16, minWidth: 260, justifyContent: "center", shadowColor: "#000", shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
+  workBtn: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 20, paddingHorizontal: 32, borderRadius: 999, marginVertical: 16, minWidth: 260, justifyContent: "center", boxShadow: "0px 4px 10px rgba(0,0,0,0.3)", elevation: 6 },
   workBtnText: { color: "#fff", fontSize: 18, fontWeight: "900", letterSpacing: 1 },
   workHint: { color: colors.textInverseSecondary, fontSize: 12, textAlign: "center" },
   sessionStats: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 10, paddingVertical: 8, paddingHorizontal: 14, borderRadius: 999, backgroundColor: "rgba(16,185,129,0.1)", alignSelf: "center" },

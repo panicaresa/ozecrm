@@ -1,14 +1,14 @@
 // Sprint 3a — global WebSocket hook for application-wide events.
 // Single connection for the entire app; listeners are registered via onAppEvent(type, cb).
 //
-// Re-uses the auth pattern of useRepLocationsWS (token from SecureStore, first
-// frame contains the JWT). Reconnects with exponential backoff (1s, 2s, 4s,
-// max 30s). If no token is present (user not logged in), the hook silently
-// sleeps and retries every 5s until a token appears.
+// Re-uses the auth pattern of useRepLocationsWS (token via getToken helper,
+// first frame is always {"token": jwt}). Reconnects with exponential backoff
+// (1s, 2s, 4s, max 30s). If no token is present (user not logged in), the
+// hook silently sleeps and retries every 5s until a token appears.
 
 import { useEffect, useRef, useState } from "react";
 import Constants from "expo-constants";
-import * as SecureStore from "expo-secure-store";
+import { getToken } from "./api";
 
 export interface AppEvent {
   type: string;
@@ -104,7 +104,7 @@ export function useAppEventsWS(enabled: boolean = true): AppEventsWSStatus {
         setStatus((s) => ({ ...s, error: "Missing EXPO_PUBLIC_BACKEND_URL" }));
         return;
       }
-      const token = await SecureStore.getItemAsync("oze_token");
+      const token = await getToken();
       if (!token) {
         // Not logged in yet — wait a bit and retry
         setStatus((s) => ({ ...s, error: "No auth token — waiting for login" }));

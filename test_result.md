@@ -639,11 +639,143 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Sprint 3.5d micro — LeadActionSheet in DrillDownable modal (research-mode actions)"
+    - "Sprint 4 — rep activity status (active/idle/offline) + Manager status filter chips + cosmetic cluster"
   stuck_tasks:
     - "Faza 2.0 GET /api/tracking/track/{rep_id} role-scoped"
   test_all: false
   test_priority: "high_first"
+
+# --- Sprint 4 (2026-04-24) ---
+sprint_4:
+  - task: "Sprint 4 — Rep activity tracking (backend)"
+    implemented: true
+    working: "NA"
+    file: "/app/backend/server.py + tests"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          - Added _bump_last_action(user) helper — fire-and-forget write of
+            users.last_action_at for handlowiec role only; silently swallows
+            DB errors so core business logic is never broken.
+          - Hooked into: POST /leads, PATCH /leads/{id}, POST /contracts,
+            PUT /rep/location.
+          - Added _rep_activity_status(last_action_at, now) → (status, minutes).
+            Rules: active <30min today, idle >=30min same UTC day, offline
+            otherwise (no activity today / never).
+          - New GET /api/rep-activity (manager+admin; handlowiec → 403).
+            Manager scope = own team, admin = all handlowcy. Returns sorted
+            list (active first, then idle, then offline).
+          - Enriched /dashboard/manager.reps_live[] with activity_status +
+            activity_minutes_ago.
+          - Tests: 9 new in TestRepActivity class (active/idle/offline/never,
+            manager scope, admin scope, handlowiec 403, bump-on-lead-create,
+            dashboard embedding). 83/83 pass + 1 skipped.
+  - task: "Sprint 4 — useRepActivity hook + Manager dashboard integration"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/lib/useRepActivity.ts + /app/frontend/app/(manager)/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          - New hook: poll /api/rep-activity every 60s (configurable);
+            exports getActivityColor() + getActivityLabel() helpers.
+          - theme.ts: added colours activeStatus (#22C55E), idleStatus
+            (#EAB308), offlineStatus (#94A3B8) — distinct from brand
+            secondary / lead-status palette.
+          - Manager dashboard: activity status dot next to rep name in the
+            rep-callout card + text "Aktywny 10 min temu" / "Bezczynny N min
+            temu" / "Offline". Uses useRepActivity data as primary source
+            with fallback to reps_live.activity_status (both are kept in
+            sync by the 60s poll).
+  - task: "Sprint 4 — Manager Dashboard: status filter chips above LeadMap"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(manager)/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Horizontal ScrollView of 6 chips: Wszystkie / Nowy / Umówione /
+          Decyzja / Podpisana / Nie zainteresowany — each with live count
+          and coloured dot matching the existing status palette. Tap wires
+          into the existing `filterStatus` state which in turn drives
+          `filteredPins` (LeadMap). Tap "Wszystkie" → reset.
+          Verified: chip "Decyzja (4)" → map narrows to 4 pins + rep list
+          filters accordingly.
+  - task: "Sprint 4 cosmetic — `vs 2 dni temu` in yesterday mode"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/DailyReportWidget.tsx"
+    stuck_count: 0
+    priority: "low"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          DailyReportWidget now reads: {period === "today" ? "vs Wczoraj"
+          : "vs 2 dni temu"} — removes the grammatical mismatch when the
+          user toggles Wczoraj. Verified in UI.
+  - task: "Sprint 4 cosmetic — SecureStore web fallback via getToken()"
+    implemented: true
+    working: "NA"
+    file: "src/lib/useRepLocationsWS.ts + useAppEventsWS.ts + backgroundTracking.ts"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Replaced direct `SecureStore.getItemAsync("oze_token")` with the
+          existing `getToken()` helper (api.ts) which is already web-safe
+          (AsyncStorage on web, SecureStore on native). This removes the
+          red dev overlay "ExpoSecureStore.default.getValueWithKeyAsync is
+          not a function" that was blocking screenshots after login on web.
+  - task: "Sprint 4 cosmetic — DELETE /api/admin/cleanup-test-data"
+    implemented: true
+    working: "NA"
+    file: "/app/backend/server.py + /app/frontend/app/(admin)/settings.tsx"
+    stuck_count: 0
+    priority: "low"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          New admin-only endpoint — deletes users whose `name` starts with
+          TEST_ / test_ / xxx (case-insensitive) AND their leads/contracts
+          and rep_locations. Protects the 3 dev seed emails by email
+          whitelist. UI button in Admin Settings under a new "Narzędzia"
+          section, with a two-step Alert.alert confirmation.
+  - task: "Sprint 4 cosmetic — shadow* → boxShadow"
+    implemented: true
+    working: "NA"
+    file: "LeadCard.tsx + ConfettiHost.tsx + (rep)/index.tsx"
+    stuck_count: 0
+    priority: "low"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Replaced all shadowColor/shadowOpacity/shadowRadius/shadowOffset
+          quadruples with a single `boxShadow: "0px Xpx Ypx rgba(...)"` in
+          our own components. Retained `elevation` for Android. Metro
+          warnings count dropped from ~18 per render to 0 from our code
+          (only library code may still log warnings — FlatList or
+          Swipeable imports).
 
 # --- Sprint 3.5d (micro-sprint) 2026-04-24 ---
 sprint_35d_micro:

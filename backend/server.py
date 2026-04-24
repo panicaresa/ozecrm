@@ -12,7 +12,7 @@ import logging
 import bcrypt
 import jwt
 from datetime import datetime, timezone, timedelta, date, time
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from collections import defaultdict
 
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, WebSocket, WebSocketDisconnect
@@ -80,6 +80,31 @@ def iso(dt: Optional[datetime]) -> Optional[str]:
     if isinstance(dt, str):
         return dt
     return dt.isoformat()
+
+
+# Sprint 4 — rep activity tracking
+# Lightweight "heartbeat" updater. Called from key handlowiec endpoints
+# (create/update lead, push location, create contract, ...) so that the
+# manager dashboard can decorate each rep with an `active/idle/offline`
+# indicator without introducing a separate presence protocol or polling.
+#
+# Important: this is a fire-and-forget write. If the DB write fails, the
+# caller's main flow (lead creation, etc.) MUST still succeed — the logic
+# here is purely observational.
+async def _bump_last_action(user: Dict[str, Any]) -> None:
+    try:
+        if not user:
+            return
+        # Only track handlowiec activity — managers/admins are observing, not working.
+        if user.get("role") != "handlowiec":
+            return
+        await db.users.update_one(
+            {"id": user.get("id")},
+            {"$set": {"last_action_at": now()}},
+        )
+    except Exception:
+        # Don't let observability break business logic.
+        pass
 
 
 def hash_password(password: str) -> str:
@@ -615,6 +640,8 @@ async def create_lead(body: LeadIn, request: Request, user: Dict[str, Any] = Dep
     if idempotency_key:
         doc["idempotency_key"] = idempotency_key
     await db.leads.insert_one(doc)
+    # Sprint 4 — bump rep activity (fire-and-forget, non-blocking)
+    await _bump_last_action(user)
     out = await db.leads.find_one({"id": lead_id}, {"_id": 0})
     out["created_at"] = iso(out.get("created_at"))
     out["updated_at"] = iso(out.get("updated_at"))
@@ -652,6 +679,8 @@ async def update_lead(lead_id: str, body: LeadUpdate, user: Dict[str, Any] = Dep
             updates["meeting_at"] = parsed.isoformat() if hasattr(parsed, "isoformat") else parsed
     updates["updated_at"] = now()
     await db.leads.update_one({"id": lead_id}, {"$set": updates})
+    # Sprint 4 — bump rep activity
+    await _bump_last_action(user)
     out = await db.leads.find_one({"id": lead_id}, {"_id": 0})
     out["created_at"] = iso(out.get("created_at"))
     out["updated_at"] = iso(out.get("updated_at"))
@@ -821,6 +850,8 @@ async def push_rep_location(body: RepLocationIn, user: Dict[str, Any] = Depends(
         "session_distance_m": round(session_distance_m, 2),
     }
     await db.rep_locations.update_one({"user_id": user["id"]}, {"$set": doc}, upsert=True)
+    # Sprint 4 — bump rep activity (GPS pings are the most frequent signal)
+    await _bump_last_action(user)
     # Broadcast via WS (non-blocking scope: subs already scoped)
     try:
         await broadcaster.broadcast(
@@ -1055,6 +1086,68 @@ async def update_settings(body: SettingsIn, admin: Dict[str, Any] = Depends(requ
     return doc
 
 
+@api.delete("/admin/cleanup-test-data")
+async def cleanup_test_data(
+    admin: Dict[str, Any] = Depends(require_roles("admin")),
+):
+    """Sprint 4 (cosmetic) — remove test users / leads / contracts created
+    during QA. Protects the 3 seed dev accounts (admin/manager/handlowiec@test.com).
+    A user/lead is considered "test" if:
+      - client_name / user.name starts with 'TEST_', 'test_', 'xxx' (case-insensitive)
+    """
+    import re
+
+    PROTECTED_EMAILS = {"admin@test.com", "manager@test.com", "handlowiec@test.com"}
+    name_pattern = {"$regex": r"^(TEST_|test_|xxx)", "$options": "i"}
+
+    # Collect test users first (need ids to clean up their leads/contracts later)
+    test_users = await db.users.find(
+        {"$and": [
+            {"name": name_pattern},
+            {"email": {"$nin": list(PROTECTED_EMAILS)}},
+        ]},
+        {"_id": 0, "id": 1, "email": 1, "name": 1},
+    ).to_list(2000)
+    test_user_ids = [u["id"] for u in test_users]
+
+    # Leads: match by client_name OR assigned to any test user
+    leads_filter: Dict[str, Any] = {"$or": [{"client_name": name_pattern}]}
+    if test_user_ids:
+        leads_filter["$or"].append({"assigned_to": {"$in": test_user_ids}})
+    leads_to_delete = await db.leads.find(
+        leads_filter, {"_id": 0, "id": 1, "client_name": 1}
+    ).to_list(5000)
+    lead_ids = [l["id"] for l in leads_to_delete]
+
+    # Contracts: match by client_name OR lead_id in deleted leads
+    contracts_filter: Dict[str, Any] = {"$or": [{"client_name": name_pattern}]}
+    if lead_ids:
+        contracts_filter["$or"].append({"lead_id": {"$in": lead_ids}})
+    contracts_deleted = 0
+    if contracts_filter.get("$or"):
+        res = await db.contracts.delete_many(contracts_filter)
+        contracts_deleted = res.deleted_count
+
+    leads_deleted = 0
+    if lead_ids:
+        res = await db.leads.delete_many({"id": {"$in": lead_ids}})
+        leads_deleted = res.deleted_count
+
+    users_deleted = 0
+    if test_user_ids:
+        res = await db.users.delete_many({"id": {"$in": test_user_ids}})
+        users_deleted = res.deleted_count
+        # Also clean up tracking data for those users
+        await db.rep_locations.delete_many({"user_id": {"$in": test_user_ids}})
+
+    return {
+        "users_deleted": users_deleted,
+        "leads_deleted": leads_deleted,
+        "contracts_deleted": contracts_deleted,
+        "message": "Test data cleaned",
+    }
+
+
 @api.get("/goals")
 async def list_goals(user: Dict[str, Any] = Depends(get_current_user)):
     if user["role"] == "handlowiec":
@@ -1164,6 +1257,11 @@ async def manager_dashboard(user: Dict[str, Any] = Depends(require_roles("manage
             if session_started.tzinfo is None:
                 session_started = session_started.replace(tzinfo=timezone.utc)
             session_seconds = int((now_ts - session_started).total_seconds())
+        # Sprint 4 — embed activity_status so dashboard can colour a status dot
+        # without a second round-trip to /rep-activity.
+        activity_status, activity_minutes_ago = _rep_activity_status(
+            u.get("last_action_at"), now_ts
+        )
         reps_live.append(
             {
                 "user_id": u["id"],
@@ -1179,6 +1277,8 @@ async def manager_dashboard(user: Dict[str, Any] = Depends(require_roles("manage
                 "updated_at": iso(ts),
                 "session_seconds": session_seconds,
                 "session_distance_m": round(float(rl.get("session_distance_m") or 0.0), 1),
+                "activity_status": activity_status,
+                "activity_minutes_ago": activity_minutes_ago,
             }
         )
 
@@ -1191,6 +1291,70 @@ async def manager_dashboard(user: Dict[str, Any] = Depends(require_roles("manage
         "reps_live": reps_live,
         "total_leads": len(leads),
     }
+
+
+# Sprint 4 — rep activity status helper (shared between /rep-activity and
+# the `activity_status` field embedded in /dashboard/manager reps_live[]).
+def _rep_activity_status(
+    last_action_at: Optional[datetime], now_dt: datetime
+) -> Tuple[str, Optional[int]]:
+    """Return (status, minutes_ago) for a rep.
+    - "active"  → last action < 30 min ago
+    - "idle"    → last action same UTC day but >= 30 min ago
+    - "offline" → no action today (or ever)
+    """
+    if not isinstance(last_action_at, datetime):
+        return ("offline", None)
+    if last_action_at.tzinfo is None:
+        last_action_at = last_action_at.replace(tzinfo=timezone.utc)
+    delta_min = int((now_dt - last_action_at).total_seconds() / 60)
+    # Same UTC calendar day as now → active or idle; otherwise offline.
+    if last_action_at.date() != now_dt.date():
+        return ("offline", delta_min)
+    if delta_min < 30:
+        return ("active", max(0, delta_min))
+    return ("idle", delta_min)
+
+
+@api.get("/rep-activity")
+async def rep_activity(
+    user: Dict[str, Any] = Depends(require_roles("manager", "admin")),
+):
+    """Sprint 4 — per-rep activity status (active / idle / offline).
+    Scope: admin → all handlowcy; manager → own team."""
+    if user["role"] == "admin":
+        reps = await db.users.find(
+            {"role": "handlowiec"},
+            {"_id": 0, "id": 1, "name": 1, "email": 1, "last_action_at": 1},
+        ).to_list(1000)
+    else:
+        reps = await db.users.find(
+            {"role": "handlowiec", "manager_id": user["id"]},
+            {"_id": 0, "id": 1, "name": 1, "email": 1, "last_action_at": 1},
+        ).to_list(1000)
+
+    cur = now()
+    result = []
+    for r in reps:
+        status, minutes_ago = _rep_activity_status(r.get("last_action_at"), cur)
+        result.append(
+            {
+                "rep_id": r["id"],
+                "rep_name": r.get("name") or r.get("email"),
+                "status": status,
+                "last_action_at": iso(r.get("last_action_at")),
+                "minutes_ago": minutes_ago,
+            }
+        )
+    # Sort: active first, then idle, then offline. Within group — most recent first.
+    order = {"active": 0, "idle": 1, "offline": 2}
+    result.sort(
+        key=lambda x: (
+            order.get(x["status"], 3),
+            x["minutes_ago"] if x["minutes_ago"] is not None else 10**9,
+        )
+    )
+    return {"reps": result, "generated_at": iso(cur)}
 
 
 @api.get("/dashboard/rep")
@@ -2143,6 +2307,8 @@ async def create_contract(
                 return _serialize_contract(existing)
         raise HTTPException(status_code=500, detail=f"Insert failed: {e}")
     await db.leads.update_one({"id": body.lead_id}, {"$set": {"status": "podpisana", "updated_at": now()}})
+    # Sprint 4 — bump rep activity
+    await _bump_last_action(user)
 
     # Sprint 3a — broadcast contract_signed event for confetti (best-effort,
     # never block successful POST /contracts on broadcaster errors).

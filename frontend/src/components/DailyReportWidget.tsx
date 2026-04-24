@@ -521,7 +521,7 @@ export function DailyReportWidget({
         {/* Comparison row */}
         <View style={styles.comparisonRow}>
           <View style={styles.comparisonCell}>
-            <Text style={styles.comparisonLabel}>vs Wczoraj</Text>
+            <Text style={styles.comparisonLabel}>{period === "today" ? "vs Wczoraj" : "vs 2 dni temu"}</Text>
             <View style={styles.comparisonValueRow}>
               {marginDelta && (
                 <>

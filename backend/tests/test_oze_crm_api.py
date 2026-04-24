@@ -2459,3 +2459,241 @@ class TestDailyReport:
             mc["oze_crm"]["users"].delete_one({"id": new_id})
             mc.close()
 
+
+
+# ═══════════════════════════════════════════════════════════
+# Sprint 4 — rep activity (active / idle / offline)
+# ═══════════════════════════════════════════════════════════
+class TestRepActivity:
+    """Sprint 4: /rep-activity endpoint + _bump_last_action hook tests."""
+
+    def _fresh_handlowiec(
+        self, manager_id: str, last_action_offset_minutes: "int | None" = None
+    ):
+        """Insert a rep directly in Mongo; returns (id, cleanup_fn)."""
+        import uuid as _u
+        import pymongo
+        from datetime import datetime, timezone, timedelta
+
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        rid = str(_u.uuid4())
+        doc = {
+            "id": rid,
+            "email": f"act_{_u.uuid4().hex[:8]}@test.com",
+            "name": f"Activity {_u.uuid4().hex[:4]}",
+            "role": "handlowiec",
+            "manager_id": manager_id,
+            "password_hash": "dummy",
+            "created_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+        }
+        if last_action_offset_minutes is not None:
+            doc["last_action_at"] = datetime.now(timezone.utc) - timedelta(
+                minutes=last_action_offset_minutes
+            )
+        mc["oze_crm"]["users"].insert_one(doc)
+
+        def cleanup():
+            mcc = pymongo.MongoClient("mongodb://localhost:27017")
+            mcc["oze_crm"]["users"].delete_one({"id": rid})
+            mcc.close()
+
+        mc.close()
+        return rid, cleanup
+
+    def test_handlowiec_403(self, api_client, rep_token):
+        r = api_client.get(
+            f"{BASE_URL}/api/rep-activity",
+            headers={"Authorization": f"Bearer {rep_token}"},
+        )
+        assert r.status_code == 403
+
+    def test_manager_scope_only_team(self, api_client, manager_token):
+        """Manager must only see reps in their own team."""
+        import pymongo
+
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        manager = mc["oze_crm"]["users"].find_one({"email": "manager@test.com"})
+        mc.close()
+        assert manager is not None
+
+        # Create 1 rep for manager@test.com and 1 orphan rep (no manager_id)
+        rep_mine, cleanup_mine = self._fresh_handlowiec(manager["id"], 10)
+        rep_orphan, cleanup_orphan = self._fresh_handlowiec("__nonexistent__", 10)
+
+        try:
+            r = api_client.get(
+                f"{BASE_URL}/api/rep-activity",
+                headers={"Authorization": f"Bearer {manager_token}"},
+            )
+            assert r.status_code == 200, r.text
+            ids = {x["rep_id"] for x in r.json()["reps"]}
+            assert rep_mine in ids
+            assert rep_orphan not in ids, (
+                "Manager must not see reps from other teams"
+            )
+        finally:
+            cleanup_mine()
+            cleanup_orphan()
+
+    def test_admin_scope_sees_all(self, api_client, admin_token):
+        import pymongo
+
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        manager = mc["oze_crm"]["users"].find_one({"email": "manager@test.com"})
+        mc.close()
+
+        rep_mine, cleanup_mine = self._fresh_handlowiec(manager["id"], 5)
+        rep_orphan, cleanup_orphan = self._fresh_handlowiec("__nonexistent__", 5)
+        try:
+            r = api_client.get(
+                f"{BASE_URL}/api/rep-activity",
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
+            assert r.status_code == 200, r.text
+            ids = {x["rep_id"] for x in r.json()["reps"]}
+            assert rep_mine in ids and rep_orphan in ids
+        finally:
+            cleanup_mine()
+            cleanup_orphan()
+
+    def test_active_rep_recent_action(self, api_client, manager_token):
+        import pymongo
+
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        manager = mc["oze_crm"]["users"].find_one({"email": "manager@test.com"})
+        mc.close()
+        rid, cleanup = self._fresh_handlowiec(manager["id"], 10)  # 10 min ago
+        try:
+            r = api_client.get(
+                f"{BASE_URL}/api/rep-activity",
+                headers={"Authorization": f"Bearer {manager_token}"},
+            )
+            assert r.status_code == 200, r.text
+            entry = next((x for x in r.json()["reps"] if x["rep_id"] == rid), None)
+            assert entry is not None
+            assert entry["status"] == "active"
+            assert 5 <= entry["minutes_ago"] <= 15
+        finally:
+            cleanup()
+
+    def test_idle_rep_30min_plus_action(self, api_client, manager_token):
+        import pymongo
+
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        manager = mc["oze_crm"]["users"].find_one({"email": "manager@test.com"})
+        mc.close()
+        rid, cleanup = self._fresh_handlowiec(manager["id"], 120)  # 2h ago (today)
+        try:
+            r = api_client.get(
+                f"{BASE_URL}/api/rep-activity",
+                headers={"Authorization": f"Bearer {manager_token}"},
+            )
+            assert r.status_code == 200, r.text
+            entry = next((x for x in r.json()["reps"] if x["rep_id"] == rid), None)
+            assert entry is not None
+            assert entry["status"] == "idle", f"got {entry}"
+        finally:
+            cleanup()
+
+    def test_offline_rep_yesterday(self, api_client, manager_token):
+        import pymongo
+
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        manager = mc["oze_crm"]["users"].find_one({"email": "manager@test.com"})
+        mc.close()
+        # 2 days ago — definitely not "today"
+        rid, cleanup = self._fresh_handlowiec(manager["id"], 60 * 24 * 2)
+        try:
+            r = api_client.get(
+                f"{BASE_URL}/api/rep-activity",
+                headers={"Authorization": f"Bearer {manager_token}"},
+            )
+            assert r.status_code == 200, r.text
+            entry = next((x for x in r.json()["reps"] if x["rep_id"] == rid), None)
+            assert entry is not None
+            assert entry["status"] == "offline", f"got {entry}"
+        finally:
+            cleanup()
+
+    def test_offline_rep_never_worked(self, api_client, manager_token):
+        """Brand-new handlowiec (no last_action_at field) should be 'offline'."""
+        import pymongo
+
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        manager = mc["oze_crm"]["users"].find_one({"email": "manager@test.com"})
+        mc.close()
+        rid, cleanup = self._fresh_handlowiec(manager["id"], None)
+        try:
+            r = api_client.get(
+                f"{BASE_URL}/api/rep-activity",
+                headers={"Authorization": f"Bearer {manager_token}"},
+            )
+            assert r.status_code == 200, r.text
+            entry = next((x for x in r.json()["reps"] if x["rep_id"] == rid), None)
+            assert entry is not None
+            assert entry["status"] == "offline"
+            assert entry["last_action_at"] is None
+            assert entry["minutes_ago"] is None
+        finally:
+            cleanup()
+
+    def test_bump_last_action_on_lead_create(self, api_client, rep_token):
+        """Creating a lead as handlowiec should stamp last_action_at."""
+        import pymongo
+        from datetime import datetime, timezone, timedelta
+
+        # Snapshot rep doc before
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        before = mc["oze_crm"]["users"].find_one({"email": "handlowiec@test.com"})
+        before_ts = before.get("last_action_at")
+        mc.close()
+
+        # Create a lead via API
+        import uuid as _u
+        payload = {
+            "client_name": f"BumpTest_{_u.uuid4().hex[:6]}",
+            "phone": "+48111222333",
+            "address": "ul. Testowa 99, Gdańsk",
+            "latitude": 54.35,
+            "longitude": 18.60,
+            "status": "nowy",
+            # Faza 2.1 — photo is required for handlowiec lead creation
+            "photo_base64": "data:image/png;base64," + ("A" * 200),
+        }
+        r = api_client.post(
+            f"{BASE_URL}/api/leads",
+            headers={"Authorization": f"Bearer {rep_token}"},
+            json=payload,
+        )
+        assert r.status_code == 200, r.text
+        lead_id = r.json()["id"]
+
+        # Confirm last_action_at advanced
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        after = mc["oze_crm"]["users"].find_one({"email": "handlowiec@test.com"})
+        after_ts = after.get("last_action_at")
+        # Cleanup
+        mc["oze_crm"]["leads"].delete_one({"id": lead_id})
+        mc.close()
+
+        assert after_ts is not None, "last_action_at must be set after lead create"
+        if before_ts is not None:
+            assert after_ts > before_ts, (
+                "last_action_at must advance after POST /leads"
+            )
+
+    def test_dashboard_manager_embeds_activity_status(
+        self, api_client, manager_token
+    ):
+        """reps_live[] entries must carry activity_status + activity_minutes_ago."""
+        r = api_client.get(
+            f"{BASE_URL}/api/dashboard/manager",
+            headers={"Authorization": f"Bearer {manager_token}"},
+        )
+        assert r.status_code == 200, r.text
+        d = r.json()
+        for rep in d.get("reps_live", []):
+            assert "activity_status" in rep, f"missing activity_status in {rep}"
+            assert rep["activity_status"] in ("active", "idle", "offline")
+            assert "activity_minutes_ago" in rep

@@ -42,6 +42,33 @@ export default function AdminSettings() {
 
   const update = (k: string, v: any) => setSettings((s: any) => ({ ...s, [k]: v }));
 
+  // Sprint 4 cosmetic — test-data cleanup utility
+  const cleanupTestData = async () => {
+    Alert.alert(
+      "Usunąć dane testowe?",
+      "Usuwa użytkowników z nazwą zaczynającą się na TEST_, test_ lub xxx (wraz z ich leadami i umowami). Kont dev@test.com to NIE dotyka.",
+      [
+        { text: "Anuluj", style: "cancel" },
+        {
+          text: "Usuń",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const res = await api.delete("/admin/cleanup-test-data");
+              const d = res.data || {};
+              Alert.alert(
+                "Gotowe",
+                `Usunięto: ${d.users_deleted ?? 0} użytkowników, ${d.leads_deleted ?? 0} leadów, ${d.contracts_deleted ?? 0} umów.`
+              );
+            } catch (e) {
+              Alert.alert("Błąd", formatApiError(e));
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const removeZip = (z: string) =>
     setSettings((s: any) => ({ ...s, excluded_zip_codes: (s.excluded_zip_codes || []).filter((x: string) => x !== z) }));
 
@@ -194,6 +221,22 @@ export default function AdminSettings() {
           <Field label="NIP" value={settings.company_nip || ""} onChangeText={(v) => update("company_nip", v)} />
           <Field label="E-mail" value={settings.company_email || ""} onChangeText={(v) => update("company_email", v)} keyboardType="email-address" />
           <Field label="Telefon" value={settings.company_phone || ""} onChangeText={(v) => update("company_phone", v)} keyboardType="phone-pad" />
+
+          {/* Sprint 4 cosmetic — Clean test data utility (dev only) */}
+          <Text style={styles.section}>Narzędzia</Text>
+          <Text style={styles.hint}>
+            Usuwa użytkowników oraz ich leady/umowy których nazwa zaczyna się od
+            "TEST_", "test_" lub "xxx". Konta dev@test.com nie są dotykane.
+          </Text>
+          <TouchableOpacity
+            style={styles.cleanupBtn}
+            onPress={cleanupTestData}
+            activeOpacity={0.85}
+            testID="cleanup-test-data-button"
+          >
+            <Feather name="trash" size={16} color={colors.error} />
+            <Text style={styles.cleanupText}>Wyczyść dane testowe</Text>
+          </TouchableOpacity>
         </ScrollView>
         <View style={styles.footer}>
           <Button title="Zapisz ustawienia" onPress={save} loading={saving} testID="save-settings-button" icon={<Feather name="save" size={18} color="#fff" />} />
@@ -213,5 +256,24 @@ const styles = StyleSheet.create({
   listRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 12, backgroundColor: colors.paper, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border },
   listText: { color: colors.textPrimary, fontSize: 14 },
   addBtnSmall: { width: 52, height: 52, borderRadius: radius.md, backgroundColor: colors.primary, alignItems: "center", justifyContent: "center", marginBottom: 16 },
+  cleanupBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: `${colors.error}40`,
+    backgroundColor: `${colors.error}10`,
+    marginBottom: 24,
+  },
+  cleanupText: {
+    color: colors.error,
+    fontSize: 14,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+  },
   footer: { position: "absolute", left: 0, right: 0, bottom: 0, padding: spacing.md, backgroundColor: colors.paper, borderTopWidth: 1, borderTopColor: colors.border },
 });
