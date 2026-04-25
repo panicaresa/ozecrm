@@ -266,12 +266,16 @@ class SettingsIn(BaseModel):
     margin_per_m2: float = 50.0
     rrso_rates: List[Dict[str, Any]] = Field(default_factory=list)
     excluded_zip_codes: List[str] = Field(default_factory=list)
-    company_name: str = "Polska Grupa OZE Sp. z o.o."
-    company_address: str = "ul. Grunwaldzka 415"
-    company_zip: str = "80-309 Gdańsk"
-    company_nip: str = "NIP: 732-219-77-56"
-    company_email: str = "biuro@grupaoze.pl"
-    company_phone: str = "+48 509-274-365"
+    # ISSUE-002 (Batch 1 audit): no hardcoded company data in source.
+    # Real values come from (a) DB settings doc edited via Admin UI, or
+    # (b) bootstrap from env vars (COMPANY_*) in ensure_indexes_and_migrations
+    # if the settings doc has empty/missing fields.
+    company_name: str = ""
+    company_address: str = ""
+    company_zip: str = ""
+    company_nip: str = ""
+    company_email: str = ""
+    company_phone: str = ""
 
 
 class GoalIn(BaseModel):
@@ -2633,8 +2637,7 @@ async def ensure_indexes_and_migrations():
     try:
         await db.leads.update_many(
             {"nearby_override_confirmed": {"$exists": False}},
-            {"$set": {"nearby_override_confirmed": False}},
-        )
+            {"$set": {"nearby_override_confirmed": False}},        )
     except Exception as e:
         logger.warning(f"nearby_override_confirmed migration skipped: {e}")
 
@@ -2654,6 +2657,30 @@ async def ensure_indexes_and_migrations():
         if missing:
             await db.settings.update_one({"id": "global"}, {"$set": missing})
             logger.info(f"Settings migration: backfilled keys {list(missing.keys())}")
+
+    # ISSUE-002 (Batch 1 audit): bootstrap company data from env vars only if
+    # the settings doc has empty/missing values. Existing populated settings
+    # are preserved (admin can still edit them via Admin Settings UI).
+    settings_doc = await db.settings.find_one({"id": "global"}) or {}
+    company_env = {
+        "company_name": os.environ.get("COMPANY_NAME", ""),
+        "company_address": os.environ.get("COMPANY_ADDRESS", ""),
+        "company_zip": os.environ.get("COMPANY_ZIP", ""),
+        "company_nip": os.environ.get("COMPANY_NIP", ""),
+        "company_email": os.environ.get("COMPANY_EMAIL", ""),
+        "company_phone": os.environ.get("COMPANY_PHONE", ""),
+    }
+    company_updates = {}
+    for key, env_val in company_env.items():
+        if env_val and not (settings_doc.get(key) or "").strip():
+            company_updates[key] = env_val
+    if company_updates:
+        await db.settings.update_one(
+            {"id": "global"}, {"$set": company_updates}, upsert=True
+        )
+        logger.info(
+            f"ISSUE-002 bootstrap: set {len(company_updates)} company fields from env"
+        )
 
 
 async def seed_prod_admin_if_empty():
@@ -2856,26 +2883,6 @@ All test users share password: **test1234**
 @api.get("/")
 async def root():
     return {"message": "OZE CRM API", "status": "ok"}
-
-
-# ── Temporary download endpoint (token-gated, one-off backup serving) ────────
-# REMOVE THIS BLOCK when no longer needed. Token is rotated each deploy.
-from fastapi.responses import FileResponse as _FileResponse  # local import
-_DOWNLOAD_TOKEN = "DKeA5HMSXK-TIphmWeGXpsxB7eKCDJYV"
-_DOWNLOAD_PATH = "/tmp/oze-crm-app.zip"
-
-
-@api.get("/_download/{token}/oze-crm-app.zip")
-async def _download_archive(token: str):
-    if token != _DOWNLOAD_TOKEN:
-        raise HTTPException(status_code=404, detail="Not found")
-    if not os.path.exists(_DOWNLOAD_PATH):
-        raise HTTPException(status_code=404, detail="Archive not found")
-    return _FileResponse(
-        _DOWNLOAD_PATH,
-        media_type="application/zip",
-        filename="oze-crm-app.zip",
-    )
 
 
 # ── CORS whitelist (Batch A — security hardening) ────────────────────────────
