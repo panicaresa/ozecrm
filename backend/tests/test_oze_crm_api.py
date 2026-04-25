@@ -1995,10 +1995,14 @@ class TestCommissionFraudPrevention:
     # ── Negative margin works with allow_negative_margin + admin ────────────
     def test_negative_margin_succeeds_with_override(self, api_client, admin_token, rep_token):
         self._cleanup()
+        # Sprint Batch 3 follow-up: use relative date so test doesn't break
+        # when the system clock crosses midnight past the hardcoded literal.
+        from datetime import date, timedelta
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
         lead = self._create_signed_lead(api_client, rep_token, jitter=6)
         body = {
             "lead_id": lead["id"],
-            "signed_at": "2026-04-23",
+            "signed_at": yesterday,
             "buildings_count": 1,
             "building_type": "mieszkalny",
             "roof_area_m2": 200.0,
@@ -2018,10 +2022,30 @@ class TestCommissionFraudPrevention:
         c = r.json()
         assert c["computed_margin"] == -10000.0
         assert c["negative_margin_override"] is True
-        # Commission is MAX(0, margin) * pct in backend? Actually our code uses
-        # effective_margin which will be -10000; commission = -5000.
-        # That matches the business intent: negative margin ⇒ negative commission audit trail.
-        assert c["commission_amount"] == -5000.0
+        # Sprint Batch 3 (ISSUE-008): commission_amount is now CLAMPED to 0
+        # for negative margins. The raw value (-5000.0) is preserved in
+        # commission_audit_value for audit trail / admin transparency.
+        assert c["commission_amount"] == 0.0, (
+            f"commission_amount must be clamped to 0, got {c['commission_amount']}"
+        )
+        assert c["commission_audit_value"] == -5000.0, (
+            f"commission_audit_value must retain raw negative value, got {c.get('commission_audit_value')}"
+        )
+        # An explicit audit-log entry is written for the clamp.
+        import pymongo
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        try:
+            audit = mc["oze_crm"]["contract_audit_log"].find_one(
+                {"contract_id": c["id"], "field": "commission_negative_clamp"}
+            )
+            assert audit is not None, (
+                "ISSUE-008: commission_negative_clamp audit entry must be written"
+            )
+            assert audit["old_value"] == -5000.0
+            assert audit["new_value"] == 0.0
+            assert audit.get("reason"), "audit entry must carry a reason"
+        finally:
+            mc.close()
         self._cleanup()
 
     # ── Preview endpoint ────────────────────────────────────────────────────
@@ -2040,6 +2064,59 @@ class TestCommissionFraudPrevention:
         assert d["is_negative"] is False
         assert d["commission_percent"] == 50.0
         assert d["computed_commission"] == 11250.0
+
+    # ── Sprint Batch 3 (ISSUE-008) — explicit audit-log entry on negative
+    # commission clamp, with a different parameter set from the success test
+    # above (smaller roof, deeper negative, asserts old/new values match).
+    def test_negative_margin_audit_log_entry(self, api_client, admin_token, rep_token):
+        self._cleanup()
+        from datetime import date, timedelta
+
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        lead = self._create_signed_lead(api_client, rep_token, jitter=11)
+        body = {
+            "lead_id": lead["id"],
+            "signed_at": yesterday,
+            "buildings_count": 1,
+            "building_type": "mieszkalny",
+            "roof_area_m2": 100.0,        # < 200 → cost_per_m2 = 275
+            "gross_amount": 20000.0,      # firm_cost = 27500 → margin = -7500
+            "allow_negative_margin": True,
+            "financing_type": "cash",
+            "down_payment_amount": 20000.0,
+            "installments_count": 1,
+            "total_paid_amount": 20000.0,
+        }
+        r = api_client.post(
+            f"{BASE_URL}/api/contracts",
+            json=body,
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert r.status_code == 200, r.text
+        c = r.json()
+        # Math sanity
+        assert c["computed_margin"] == -7500.0
+        assert c["negative_margin_override"] is True
+        # Clamp: payable 0, audit retained
+        assert c["commission_amount"] == 0.0
+        assert c["commission_audit_value"] == -3750.0  # 50% of -7500
+        # Explicit audit log entry
+        import pymongo
+
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        try:
+            audit = mc["oze_crm"]["contract_audit_log"].find_one(
+                {"contract_id": c["id"], "field": "commission_negative_clamp"}
+            )
+            assert audit is not None
+            assert audit["old_value"] == -3750.0
+            assert audit["new_value"] == 0.0
+            assert audit["changed_by"]
+            assert audit["changed_by_role"] == "admin"
+            assert "negative_margin_override" in (audit.get("reason") or "")
+        finally:
+            mc.close()
+        self._cleanup()
 
     # ── is_high_margin flag in broadcast payload ────────────────────────────
     def test_high_margin_flag_in_broadcast(self, api_client, rep_token):

@@ -139,4 +139,42 @@
 - [ ] Frontend race-conditioning: when `ConfettiHost` receives a `contract_signed` event, it does 2 sequential REST calls (`/contracts/{id}` then `/leads/{lead_id}`). Could be one combined endpoint `/contracts/{id}?include=lead` to halve latency. Out of Wave 1 scope.
 - [ ] `EventBroadcaster` also broadcasts other events (lead-created etc.); audit each call site to ensure scope params are passed where PII is involved.
 - [ ] Consider broadcaster-side audit log: store every fan-out decision (sub_id, role, accepted/dropped) for retro debugging when PII concerns are raised.
+
+---
+
+## 2026-04-25 — Batch 3 audit fix (Wave 1 — narrow scope)
+
+### ISSUE-008: Commission negative-clamp + audit value
+- **Problem:** A contract created with `allow_negative_margin=True` (manager VIP override) propagated a NEGATIVE `commission_amount` (e.g. `-5000.0 PLN`) into all reads and into the finance-v2 `commission_payable_sum` aggregation. Booking-wise nonsense ("ujemna prowizja do wypłaty") and confusing for handlowcy who saw negative commissions in their own finance view.
+- **Decision (user):** split concerns
+  - `commission_amount` (display + payable sum)  → ALWAYS `>= 0` (clamped)
+  - `commission_audit_value` (raw, may be negative) → audit trail
+- **Remediation:**
+  - [x] `create_contract`: compute raw `commission_audit_value = pct * effective_margin`, then `commission_amount = max(0.0, commission_audit_value)`. Both stored on the doc.
+  - [x] `_serialize_contract`: returns both fields. Legacy contracts (no `commission_audit_value` field) get `None` so frontend can detect "old format".
+  - [x] On `negative_margin_override and commission_audit_value < 0`, write an explicit `contract_audit_log` entry with `field="commission_negative_clamp", old_value=raw, new_value=0, reason="negative_margin_override active; payable clamped to 0..."`. Includes `changed_by`, `changed_by_role`, `changed_at`.
+  - [x] Finance-v2 (`_compute_finance_v2`) already reads `commission_amount` (now clamped). NO finance code changed.
+  - [x] **Backward compat preserved** — existing contracts with persisted `commission_amount: -5000` stay as-is; passive migration. New contracts get the split; legacy ones can be re-saved through admin UI later if desired.
+- **Verification:**
+  - `test_negative_margin_succeeds_with_override` (updated): asserts `commission_amount == 0.0`, `commission_audit_value == -5000.0`, audit log entry written, `changed_by_role == "admin"`. ✅ PASSED.
+  - `test_negative_margin_audit_log_entry` (NEW, different math): 100 m² roof + 20 000 PLN gross → margin -7 500, raw commission -3 750, clamped 0; audit entry has `old_value=-3750, new_value=0`. ✅ PASSED.
+  - All 3 dev accounts log in OK; backend reload clean.
+
+### ISSUE-009: Hard caps on `commission_percent` / margin
+- **Status:** **DEFERRED to PHASE 4 (SaaS-ification)** per user decision.
+- **Rationale:** single-tenant deployment for the user's own firm; 3 known managers; audit-log + ex-post review is judged sufficient. Hard caps would block legitimate VIP-override flows that the business uses.
+- **What changes when SaaS-ify:** admin of each tenant configures their own caps in `settings` (e.g. `max_commission_percent: 70`, `max_margin_pct_of_cost: 200`). Backend rejects out-of-bounds posts with 422. Existing deferred docs in PHASE 4 backlog.
+
+### Test impact
+- **Pre-Batch-3:** 78 passed + 2 skipped + 8 pre-existing date-flake failures.
+- **Post-Batch-3:** **79 passed (+1)** + 2 skipped + 8 failures.
+  - `test_negative_margin_succeeds_with_override` flipped FAIL → PASS (relative-date fix + new clamp assertions).
+  - `test_negative_margin_audit_log_entry` (NEW) PASS.
+  - The remaining 8 failures are the same pre-existing date-clock ones documented in Batch 1 (system date 2026-04-25 vs. hardcoded `signed_at="2026-04-23"`), unrelated to Batch 3.
+
+### Open follow-ups (post-Batch-3)
+- [ ] **Frontend admin UI** — show `commission_audit_value` next to `commission_amount` for contracts where `negative_margin_override === true && commission_audit_value < 0`. Tooltip "Audit: -3 750 zł (czysta matematyka, nieujęte do wypłaty)". Marked OPTIONAL by user; backend already guarantees the audit trail.
+- [ ] **Pre-existing date-flake fixtures** (8 tests) — replace `signed_at="2026-04-23"` with relative-date helper. This Batch fixed the one we touched (`test_negative_margin_succeeds_with_override`); a sweep-fix for the other 8 should be a separate cleanup ticket.
+- [ ] **Legacy contracts** with `commission_amount < 0` — currently still summed as negative in finance-v2 (passive migration, by design). When user is comfortable, a one-off backfill script can clamp them and write retroactive audit entries.
+- [ ] **PHASE 4 SaaS-ification:** ISSUE-009 hard caps come back as per-tenant `settings.max_commission_percent` / `max_margin_pct_of_cost` enforced at POST `/contracts` time.
 - [ ] **Compromised ZIP archive scope review** — if the previously-served `/tmp/oze-crm-app.zip` may have been downloaded by adversaries, consider whether ANY other secrets were inside that ZIP at the time of its creation. JWT_SECRET rotation already invalidates any leaked JWTs; but other secrets (LLM keys, third-party API tokens) — none currently in `.env` per audit — would also need rotation if they had been included.

@@ -1768,6 +1768,10 @@ def _serialize_contract(c: Dict[str, Any], rep_name: Optional[str] = None) -> Di
         "total_paid_amount": c.get("total_paid_amount") or 0.0,
         "commission_percent": c.get("commission_percent"),
         "commission_amount": c.get("commission_amount"),
+        # Sprint Batch 3 (ISSUE-008): raw commission value (may be negative for
+        # contracts created with negative_margin_override). Legacy contracts
+        # have this absent → return None so frontend can detect "old format".
+        "commission_audit_value": c.get("commission_audit_value"),
         # Sprint 4.5 — fraud-prevention audit fields (nullable for legacy contracts)
         "cost_per_m2": c.get("cost_per_m2"),
         "firm_cost": c.get("firm_cost"),
@@ -2306,7 +2310,15 @@ async def create_contract(
         if body.commission_percent_override is not None
         else float(settings_doc.get("commission_percent") or 50.0)
     )
-    commission_amount = round((commission_pct / 100.0) * float(effective_margin), 2)
+    # Sprint Batch 3 (ISSUE-008): split commission into:
+    #   - commission_audit_value (raw, may be negative for VIP override transparency)
+    #   - commission_amount      (payable, clamped >= 0 — used in finance sums)
+    # Backward compat: legacy contracts have commission_amount possibly negative;
+    # they keep their old value (passive migration). New contracts get both fields.
+    commission_audit_value = round(
+        (commission_pct / 100.0) * float(effective_margin), 2
+    )
+    commission_amount = round(max(0.0, commission_audit_value), 2)
     total_paid = float(body.total_paid_amount or 0.0)
     if body.financing_type == "cash" and body.down_payment_amount is not None and total_paid <= 0:
         total_paid = float(body.down_payment_amount)
@@ -2338,6 +2350,7 @@ async def create_contract(
         "total_paid_amount": round(total_paid, 2),
         "commission_percent": commission_pct,
         "commission_amount": commission_amount,
+        "commission_audit_value": commission_audit_value,
         "note": body.note,
         "cancelled": False,
         "idempotency_key": idempotency_key,
@@ -2358,6 +2371,31 @@ async def create_contract(
                 return _serialize_contract(existing)
         raise HTTPException(status_code=500, detail=f"Insert failed: {e}")
     await db.leads.update_one({"id": body.lead_id}, {"$set": {"status": "podpisana", "updated_at": now()}})
+    # Sprint Batch 3 (ISSUE-008): if a negative-margin override clamped the
+    # commission to 0, write an explicit audit-log entry so admins can see
+    # exactly how much "raw commission" was waived for transparency.
+    if doc.get("negative_margin_override") and commission_audit_value < 0:
+        try:
+            await db.contract_audit_log.insert_one(
+                {
+                    "contract_id": doc["id"],
+                    "field": "commission_negative_clamp",
+                    "old_value": commission_audit_value,
+                    "new_value": commission_amount,
+                    "reason": (
+                        "negative_margin_override active; payable clamped to 0 "
+                        "per Batch 3 ISSUE-008 (raw value retained for audit)"
+                    ),
+                    "changed_by": user["id"],
+                    "changed_by_name": user.get("name"),
+                    "changed_by_role": user["role"],
+                    "changed_at": now(),
+                }
+            )
+        except Exception as e:
+            logger.warning(
+                f"contract_audit_log insert (negative clamp) failed for {doc['id']}: {e}"
+            )
     # Sprint 4 — bump rep activity
     await _bump_last_action(user)
 
