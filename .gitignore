@@ -89,3 +89,12 @@ android-sdk/
 # to be in the repository to inject runtime env vars. Pre-commit duplicates
 # previously inserted by tooling have been removed (Sprint 5a deployment
 # health check, 2026-04-25).
+-e 
+# Environment and credential files
+.env
+.env.*
+*.env
+credentials.json
+*.pem
+*.key
+.credentials
