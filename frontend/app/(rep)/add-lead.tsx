@@ -22,6 +22,7 @@ import { Field } from "../../src/components/Field";
 import { api, formatApiError } from "../../src/lib/api";
 import { DateTimeField } from "../../src/components/DateTimeField";
 import { enqueueLead, isNetworkError } from "../../src/lib/offlineQueue";
+import { compressPhoto } from "../../src/lib/imageCompression";
 
 const STATUSES = ["nowy", "umowione", "decyzja", "podpisana", "nie_zainteresowany"];
 const BUILDING_TYPES: { value: "mieszkalny" | "gospodarczy"; label: string }[] = [
@@ -49,6 +50,10 @@ export default function AddLead() {
   const [meetingAt, setMeetingAt] = useState<Date | null>(null);
   const [photo, setPhoto] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Sprint 5-pre (ISSUE-012): separate loading state for the photo
+  // compression step so the user sees "Kompresja zdjęcia…" during the
+  // 1-2 s pre-upload work instead of staring at a frozen Save button.
+  const [compressing, setCompressing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [locating, setLocating] = useState(false);
 
@@ -153,6 +158,24 @@ export default function AddLead() {
   const idempotencyKey = useRef<string>(`lead-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
 
   const performSave = async (extra: Record<string, any> = {}) => {
+    // Sprint 5-pre (ISSUE-012): compress photo before online POST.
+    // Raw camera frames are 4-6 MB base64 — they reliably timed out at 5s.
+    // The same compressPhoto helper is used by the offline queue when
+    // enqueueing, so we get consistent on-disk and on-wire sizes.
+    let compressedPhoto = photo;
+    if (photo) {
+      try {
+        setCompressing(true);
+        compressedPhoto = await compressPhoto(photo);
+      } catch (err) {
+        console.warn("compressPhoto failed, using original photo", err);
+        // Fallback: use the original — better to attempt the upload
+        // than to fail with no photo (which would 4xx the request).
+      } finally {
+        setCompressing(false);
+      }
+    }
+
     const body: Record<string, any> = {
       client_name: clientName.trim(),
       phone: phone.trim() || null,
@@ -165,13 +188,15 @@ export default function AddLead() {
       status,
       latitude,
       longitude,
-      photo_base64: photo,
+      photo_base64: compressedPhoto,
       meeting_at: meetingAt ? meetingAt.toISOString() : null,
       ...extra,
     };
     await api.post("/leads", body, {
       headers: { "Idempotency-Key": idempotencyKey.current },
-      timeout: 5000,
+      // Sprint 5-pre (ISSUE-012): 30 s budget for compressed (~200-300 KB)
+      // JPEG over average 4G. Was 5 s — guaranteed timeout for any photo.
+      timeout: 30000,
     });
     stopGpsWatch();
     router.back();
