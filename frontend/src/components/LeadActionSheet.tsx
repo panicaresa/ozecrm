@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import { colors, radius, spacing } from "../theme";
+import { buildTelUrl } from "../lib/inputFormatters";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // LeadActionSheet (Sprint 3.5d micro)
@@ -70,16 +71,19 @@ export function LeadActionSheet({
   testID = "lead-action-sheet",
 }: LeadActionSheetProps) {
   const hasPhone = !!(lead?.phone && String(lead.phone).trim().length > 0);
+  // Sprint 5-pre-pent — use the centralized buildTelUrl so legacy phone
+  // formats ("+48 500 123 456", "500-123-456") and the new canonical raw
+  // 9-digit form all produce a working tel: link.
+  const telUrl = buildTelUrl(lead?.phone);
   const hasCoords =
     typeof lead?.latitude === "number" && typeof lead?.longitude === "number";
   const hasRep = !!(lead?.rep_id && onViewRep);
 
   const handleCall = useCallback(() => {
-    if (!hasPhone || !lead) return;
-    const tel = `tel:${String(lead.phone).replace(/\s+/g, "")}`;
-    Linking.openURL(tel).catch(() => {});
+    if (!telUrl) return;
+    Linking.openURL(telUrl).catch(() => {});
     onClose();
-  }, [hasPhone, lead, onClose]);
+  }, [telUrl, onClose]);
 
   const handleMap = useCallback(() => {
     if (!hasCoords || !lead) return;

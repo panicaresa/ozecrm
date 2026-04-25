@@ -23,6 +23,12 @@ import { api, formatApiError } from "../../src/lib/api";
 import { DateTimeField } from "../../src/components/DateTimeField";
 import { enqueueLead, isNetworkError } from "../../src/lib/offlineQueue";
 import { compressPhoto } from "../../src/lib/imageCompression";
+import {
+  formatPhoneDisplay,
+  normalizePhoneDigits,
+  formatZipDisplay,
+  normalizeZipDigits,
+} from "../../src/lib/inputFormatters";
 
 const STATUSES = ["nowy", "umowione", "decyzja", "podpisana", "nie_zainteresowany"];
 const BUILDING_TYPES: { value: "mieszkalny" | "gospodarczy"; label: string }[] = [
@@ -37,9 +43,12 @@ const GPS_HINT_TIMEOUT_MS = 30_000; // show hint after 30s
 export default function AddLead() {
   const router = useRouter();
   const [clientName, setClientName] = useState("");
-  const [phone, setPhone] = useState("");
+  // Sprint 5-pre-pent — phone/zip stored as RAW digits internally; display
+  // is computed via formatPhoneDisplay/formatZipDisplay. Body to API:
+  // phone is sent as raw 9 digits, zip as the formatted "XX-XXX" string.
+  const [phoneDigits, setPhoneDigits] = useState("");
+  const [zipDigits, setZipDigits] = useState("");
   const [address, setAddress] = useState("");
-  const [zip, setZip] = useState("");
   const [apartmentNumber, setApartmentNumber] = useState("");
   const [note, setNote] = useState("");
   const [area, setArea] = useState("");
@@ -178,9 +187,12 @@ export default function AddLead() {
 
     const body: Record<string, any> = {
       client_name: clientName.trim(),
-      phone: phone.trim() || null,
+      // Sprint 5-pre-pent — phone stored as raw 9 digits; backend persists
+      // the same canonical form so display formatters work consistently.
+      phone: phoneDigits.length === 9 ? phoneDigits : null,
       address: address.trim() || null,
-      postal_code: zip.trim() || null,
+      // ZIP stored with hyphen ("80-309") — Polish standard.
+      postal_code: zipDigits.length === 5 ? formatZipDisplay(zipDigits) : null,
       apartment_number: apartmentNumber.trim() || null,
       note: note.trim() || null,
       building_area: area ? Number(area.replace(",", ".")) : null,
@@ -268,6 +280,23 @@ export default function AddLead() {
       setErr("Podaj imię i nazwisko klienta");
       return;
     }
+    // Sprint 5-pre-pent — phone/zip masking validation. Both are optional;
+    // empty is fine. If user typed a partial value, block save with a
+    // clear message so they can fix it before the network roundtrip.
+    if (phoneDigits.length > 0 && phoneDigits.length !== 9) {
+      Alert.alert(
+        "Niepoprawny telefon",
+        "Telefon musi mieć dokładnie 9 cyfr (lub być pusty)."
+      );
+      return;
+    }
+    if (zipDigits.length > 0 && zipDigits.length !== 5) {
+      Alert.alert(
+        "Niepoprawny kod pocztowy",
+        "Kod pocztowy musi mieć dokładnie 5 cyfr (lub być pusty)."
+      );
+      return;
+    }
     // Faza 2.1 — wymagane zdjęcie
     if (!photo) {
       setErr("Zdjęcie obiektu jest wymagane. Dotknij okno powyżej, aby je dodać.");
@@ -309,9 +338,11 @@ export default function AddLead() {
         try {
           const body: Record<string, any> = {
             client_name: clientName.trim(),
-            phone: phone.trim() || null,
+            // Sprint 5-pre-pent — same canonical phone/zip schema as the
+            // online path so the queue replay produces identical records.
+            phone: phoneDigits.length === 9 ? phoneDigits : null,
             address: address.trim() || null,
-            postal_code: zip.trim() || null,
+            postal_code: zipDigits.length === 5 ? formatZipDisplay(zipDigits) : null,
             apartment_number: apartmentNumber.trim() || null,
             note: note.trim() || null,
             building_area: area ? Number(area.replace(",", ".")) : null,
@@ -364,9 +395,29 @@ export default function AddLead() {
           </TouchableOpacity>
 
           <Field label="Klient" placeholder="Imię i nazwisko" value={clientName} onChangeText={setClientName} testID="lead-name-input" />
-          <Field label="Telefon" placeholder="+48 ..." value={phone} onChangeText={setPhone} keyboardType="phone-pad" testID="lead-phone-input" />
+          {/* Sprint 5-pre-pent — phone with input masking (XXX-XXX-XXX), state
+              keeps raw 9 digits; maxLength=11 includes the 2 hyphens. */}
+          <Field
+            label="Telefon"
+            placeholder="500-100-200"
+            value={formatPhoneDisplay(phoneDigits)}
+            onChangeText={(v) => setPhoneDigits(normalizePhoneDigits(v))}
+            keyboardType="phone-pad"
+            maxLength={11}
+            testID="lead-phone-input"
+          />
           <Field label="Adres" placeholder="Ulica, miasto" value={address} onChangeText={setAddress} testID="lead-address-input" />
-          <Field label="Kod pocztowy" placeholder="00-000" value={zip} onChangeText={setZip} testID="lead-zip-input" />
+          {/* Sprint 5-pre-pent — postal code with input masking (XX-XXX) and
+              numeric keyboard; maxLength=6 includes the hyphen. */}
+          <Field
+            label="Kod pocztowy"
+            placeholder="80-309"
+            value={formatZipDisplay(zipDigits)}
+            onChangeText={(v) => setZipDigits(normalizeZipDigits(v))}
+            keyboardType="number-pad"
+            maxLength={6}
+            testID="lead-zip-input"
+          />
           <View style={apartmentHighlight ? styles.apartmentHighlight : undefined}>
             <Field
               label="Numer mieszkania / klatki (opcjonalne)"

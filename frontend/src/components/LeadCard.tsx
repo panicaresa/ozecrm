@@ -2,6 +2,7 @@ import React from "react";
 import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { colors, radius, spacing, statusColor, statusLabel } from "../theme";
+import { displayLegacyPhone } from "../lib/inputFormatters";
 
 export interface Lead {
   id: string;
@@ -44,7 +45,7 @@ export const LeadCard: React.FC<{ lead: Lead; onPress?: () => void; testID?: str
       {!!lead.phone && (
         <View style={styles.row}>
           <Feather name="phone" size={12} color={colors.textSecondary} />
-          <Text style={styles.rowText}>{lead.phone}</Text>
+          <Text style={styles.rowText}>{displayLegacyPhone(lead.phone)}</Text>
         </View>
       )}
       {!!lead.building_area && (

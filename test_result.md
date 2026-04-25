@@ -639,11 +639,130 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Sprint 5-pre-quad — Rep tap-to-action sheet (call/KPI/profile) on map markers"
+    - "Sprint 5-pre-pent — Phone+ZIP input masking + numeric keyboard + validation"
   stuck_tasks:
     - "Faza 2.0 GET /api/tracking/track/{rep_id} role-scoped"
   test_all: false
   test_priority: "high_first"
+
+# --- Sprint 5-pre-pent (2026-04-25 13:45) — Input masking ---
+sprint_5_pre_pent:
+  - task: "New: inputFormatters.ts utility (phone+zip masks, validators, legacy display, tel: builder)"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/lib/inputFormatters.ts (new)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          New utility module (~140 lines) with 8 exports:
+          • normalizePhoneDigits(input) — strip non-digits, cap 9
+          • formatPhoneDisplay(rawDigits) — XXX-XXX-XXX progressive
+          • isPhoneValid(rawDigits) — empty OR exactly 9 digits
+          • displayLegacyPhone(stored) — render any legacy format as
+            XXX-XXX-XXX (handles +48, leading 0, hyphens, spaces, raw)
+          • normalizeZipDigits + formatZipDisplay + isZipValid +
+            displayLegacyZip — analogous for postal code
+          • buildTelUrl(stored) — produces tel:+48XXXXXXXXX from any
+            stored format, returns null when input has < 6 digits
+
+  - task: "add-lead.tsx — phone/zip input masking + validation"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/(rep)/add-lead.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Replaced setState<phone>/setState<zip> with setState<phoneDigits>/
+          setState<zipDigits> holding RAW digits (state shape changed; both
+          new state vars start as ""). Field components now receive a
+          formatted display value via formatPhoneDisplay/formatZipDisplay
+          and a normalized onChangeText sink so the user can never enter
+          a non-canonical value.
+          Phone Field: keyboardType="phone-pad", maxLength=11 (9+2 hyphens).
+          Zip Field: keyboardType="number-pad" (CRITICAL — was QWERTY before),
+          maxLength=6 (5+1 hyphen).
+          
+          Validation in save(): if phoneDigits.length > 0 && !== 9 → Alert
+          "Telefon musi mieć dokładnie 9 cyfr (lub być pusty)". Same for
+          zipDigits with "Kod pocztowy musi mieć dokładnie 5 cyfr".
+          
+          Body to API:
+            phone: phoneDigits.length === 9 ? phoneDigits : null
+            postal_code: zipDigits.length === 5 ? formatZipDisplay(zipDigits) : null
+          (zip stored with hyphen — Polish standard; phone stored as raw
+          9 digits — matches what the existing CalendarScreen / RepActionSheet
+          tel: builders expect.)
+          
+          Both online POST and offline-queue paths use identical body schema.
+          Visual smoke confirmed via screenshot:
+            500123456 → "500-123-456" ✅
+            80309    → "80-309"      ✅
+
+  - task: "Display: LeadCard, LeadDetailScreen, manager drilldown — use displayLegacyPhone"
+    implemented: true
+    working: true
+    file: "Multiple display files"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          LeadCard.tsx: phone shown as displayLegacyPhone(lead.phone)
+          LeadDetailScreen.tsx: phone shown as displayLegacyPhone, postal
+            shown as displayLegacyZip in the address subline
+          (manager)/index.tsx drilldown row: same
+          
+          Old leads in DB with mixed formats (+48 500 123 456, raw, hyphenated)
+          all display uniformly as XXX-XXX-XXX without a migration job.
+          Unrecognised inputs (e.g. <6 digits) pass through verbatim — never
+          lose data.
+
+  - task: "tel: link consolidation — use buildTelUrl"
+    implemented: true
+    working: true
+    file: "LeadActionSheet.tsx + my-leads.tsx + (manager)/leads.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          All three call-sites now route through buildTelUrl(phone) which
+          prefixes "+48" for raw 9-digit Polish numbers and gracefully
+          passes through international formats from legacy data. Returns
+          null when fewer than 6 digits — caller hides/disables the action.
+          
+          RepActionSheet (manager rep tap-to-call from Sprint 5-pre-quad)
+          intentionally kept its own normalization — it deals with USER
+          phones (already standardized in seed, +48 prefixed) rather than
+          LEAD phones (mixed legacy formats). Tech debt noted.
+
+  - task: "Tests + TS check"
+    implemented: true
+    working: true
+    file: "(verify only)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Backend pytest: 98 passed / 2 skipped / 0 failed (Sprint 5-pre-quad
+          baseline preserved — phone/zip changes are 100% frontend).
+          Frontend yarn tsc --noEmit: 0 errors.
+          No backend changes needed (phone/postal_code remain Optional[str]).
 
 # --- Sprint 5-pre-quad (2026-04-25 13:00) — Rep tap-to-action ---
 sprint_5_pre_quad:

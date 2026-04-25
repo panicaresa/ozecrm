@@ -20,6 +20,7 @@ import { ProgressRow } from "../../src/components/ProgressRow";
 import { StatusDonut } from "../../src/components/StatusDonut";
 import { LeadMap } from "../../src/components/LeadMap";
 import { RepActionSheet, RepActionSheetRep } from "../../src/components/RepActionSheet";
+import { displayLegacyPhone } from "../../src/lib/inputFormatters";
 import { BrandLogo } from "../../src/components/BrandLogo";
 import { QueueBadge } from "../../src/components/QueueBadge";
 import { CommissionCalculator } from "../../src/components/CommissionCalculator";
@@ -494,7 +495,7 @@ export default function ManagerDashboard() {
                   <View style={{ flex: 1 }}>
                     <Text style={styles.drillName}>{l.client_name}</Text>
                     <Text style={styles.drillSub} numberOfLines={1}>
-                      {l.address || "—"}{l.phone ? ` · ${l.phone}` : ""}
+                      {l.address || "—"}{l.phone ? ` · ${displayLegacyPhone(l.phone)}` : ""}
                     </Text>
                   </View>
                   <Text style={[styles.drillStatus, { color: c }]}>{statusLabel[l.status] || l.status}</Text>

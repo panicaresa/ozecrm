@@ -24,6 +24,7 @@ import { Field } from "./Field";
 import { Button } from "./Button";
 import { Lead } from "./LeadCard";
 import { DateTimeField } from "./DateTimeField";
+import { displayLegacyPhone, displayLegacyZip } from "../lib/inputFormatters";
 
 const STATUSES = ["nowy", "umowione", "decyzja", "podpisana", "nie_zainteresowany"];
 
@@ -358,8 +359,8 @@ export const LeadDetailScreen: React.FC<{ leadId: string; backLabel?: string }> 
         <ScrollView contentContainerStyle={{ padding: spacing.md, paddingBottom: 120 }} keyboardShouldPersistTaps="handled">
           <View style={styles.card}>
             <Text style={styles.name}>{lead.client_name}</Text>
-            {!!lead.phone && (<View style={styles.row}><Feather name="phone" size={14} color={colors.textSecondary} /><Text style={styles.rowText}>{lead.phone}</Text></View>)}
-            {!!lead.address && (<View style={styles.row}><Feather name="map-pin" size={14} color={colors.textSecondary} /><Text style={styles.rowText}>{lead.address}</Text></View>)}
+            {!!lead.phone && (<View style={styles.row}><Feather name="phone" size={14} color={colors.textSecondary} /><Text style={styles.rowText}>{displayLegacyPhone(lead.phone)}</Text></View>)}
+            {!!lead.address && (<View style={styles.row}><Feather name="map-pin" size={14} color={colors.textSecondary} /><Text style={styles.rowText}>{lead.address}{lead.postal_code ? ` · ${displayLegacyZip(lead.postal_code)}` : ""}</Text></View>)}
             {!!lead.apartment_number && (
               <View style={styles.row}>
                 <Feather name="home" size={14} color={colors.textSecondary} />

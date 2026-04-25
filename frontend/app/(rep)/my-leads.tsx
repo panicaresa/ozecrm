@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, Linking, Platform } from "rea
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import { useRouter, useFocusEffect } from "expo-router";
+import { buildTelUrl } from "../../src/lib/inputFormatters";
 import { api, formatApiError } from "../../src/lib/api";
 import { colors, spacing } from "../../src/theme";
 import { LeadCard, Lead } from "../../src/components/LeadCard";
@@ -186,7 +187,11 @@ export default function MyLeads() {
         label: "Zadzwoń",
         color: colors.success,
         onPress: (l) => {
-          if (l.phone) Linking.openURL(`tel:${l.phone}`).catch(() => {});
+          // Sprint 5-pre-pent — buildTelUrl prefixes +48 for raw 9-digit
+          // Polish numbers and gracefully passes through international
+          // formats from legacy data.
+          const url = buildTelUrl(l.phone);
+          if (url) Linking.openURL(url).catch(() => {});
         },
       },
       {

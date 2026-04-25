@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, Linking, Platform } from "rea
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
+import { buildTelUrl } from "../../src/lib/inputFormatters";
 import { api, formatApiError } from "../../src/lib/api";
 import { colors, radius, spacing } from "../../src/theme";
 import { LeadCard, Lead } from "../../src/components/LeadCard";
@@ -173,7 +174,10 @@ export default function ManagerLeads() {
         label: "Zadzwoń",
         color: colors.success,
         onPress: (l) => {
-          if (l.phone) Linking.openURL(`tel:${l.phone}`).catch(() => {});
+          if (l.phone) {
+            const url = buildTelUrl(l.phone);
+            if (url) Linking.openURL(url).catch(() => {});
+          }
         },
       },
       {
