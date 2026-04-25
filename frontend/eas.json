@@ -30,13 +30,11 @@
         "buildType": "app-bundle"
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": ""
+        "EXPO_PUBLIC_BACKEND_URL": "https://renewable-sales-hub.preview.emergentagent.com"
       }
     }
   },
   "submit": {
-    "production": {
-      "_comment": "TODO: po upload do Play Console dodać serviceAccountKeyPath i track: internal"
-    }
+    "production": {}
   }
 }
