@@ -5,7 +5,24 @@ Tests auth, settings, dashboard, leads, and users endpoints
 import pytest
 import requests
 import os
+from datetime import date, timedelta
 from pathlib import Path
+
+
+# Sprint 5-pre — relative date helpers. Many contract-signing tests used to
+# hardcode signed_at="2026-04-23"; that worked when the test server clock was
+# parked on that day, but the runtime clock has moved forward so the literal
+# now violates the "wczorajsza lub dzisiejsza" rule and 8 tests started
+# failing as a date-flake. yesterday_iso() guarantees a value that is always
+# accepted by both handlowiec (-1d allowed) and admin (-90d allowed).
+def yesterday_iso() -> str:
+    """ISO 8601 date string for yesterday (UTC-naive — local date is fine
+    because the backend itself only compares date components)."""
+    return (date.today() - timedelta(days=1)).isoformat()
+
+
+def today_iso() -> str:
+    return date.today().isoformat()
 
 # Read BASE_URL from frontend .env file
 def get_base_url():
@@ -1730,7 +1747,7 @@ class TestContractSignedEvent:
         # POST /contracts after WS is subscribed
         contract_body = {
             "lead_id": lead_id,
-            "signed_at": "2026-04-23",
+            "signed_at": yesterday_iso(),
             "buildings_count": 1,
             "building_type": "mieszkalny",
             "roof_area_m2": 100.0,
@@ -1760,10 +1777,16 @@ class TestContractSignedEvent:
         e = received[0]
         assert e.get("type") == "contract_signed"
         assert e.get("rep_id") == rep_id
-        assert "client_name" in e
-        assert "gross_amount" in e
-        assert e.get("gross_amount") == 45000.0
-        assert "commission_amount" in e
+        # Sprint Batch 2 ISSUE-003 — broadcaster ships a THIN payload only
+        # (no PII like client_name/gross_amount). Frontend fetches details
+        # via REST with normal RBAC. Assert the thin schema.
+        assert "contract_id" in e
+        assert "is_high_margin" in e
+        assert "signed_at" in e
+        # PII MUST NOT be in the broadcast frame
+        assert "client_name" not in e
+        assert "gross_amount" not in e
+        assert "commission_amount" not in e
 
         # Cleanup
         self._cleanup()
@@ -1778,7 +1801,7 @@ class TestContractSignedEvent:
         lead = self._create_signed_lead(api_client, rep_token, jitter=2)
         body = {
             "lead_id": lead["id"],
-            "signed_at": "2026-04-23",
+            "signed_at": yesterday_iso(),
             "buildings_count": 1,
             "building_type": "mieszkalny",
             "roof_area_m2": 120.0,
@@ -1847,7 +1870,7 @@ class TestCommissionFraudPrevention:
         # 100 m² * 275 = 27500 firm_cost; gross 40000 → margin 12500
         body = {
             "lead_id": lead["id"],
-            "signed_at": "2026-04-23",
+            "signed_at": yesterday_iso(),
             "buildings_count": 1,
             "building_type": "mieszkalny",
             "roof_area_m2": 100.0,
@@ -1881,7 +1904,7 @@ class TestCommissionFraudPrevention:
         # 250 m² * 200 = 50000 firm_cost; gross 60000 → margin 10000
         body = {
             "lead_id": lead["id"],
-            "signed_at": "2026-04-23",
+            "signed_at": yesterday_iso(),
             "buildings_count": 1,
             "building_type": "mieszkalny",
             "roof_area_m2": 250.0,
@@ -1911,7 +1934,7 @@ class TestCommissionFraudPrevention:
         lead = self._create_signed_lead(api_client, rep_token, jitter=3)
         body = {
             "lead_id": lead["id"],
-            "signed_at": "2026-04-23",
+            "signed_at": yesterday_iso(),
             "buildings_count": 1,
             "building_type": "mieszkalny",
             "roof_area_m2": 150.0,
@@ -1944,7 +1967,7 @@ class TestCommissionFraudPrevention:
         lead = self._create_signed_lead(api_client, rep_token, jitter=4)
         body = {
             "lead_id": lead["id"],
-            "signed_at": "2026-04-23",
+            "signed_at": yesterday_iso(),
             "buildings_count": 1,
             "building_type": "mieszkalny",
             "roof_area_m2": 200.0,  # cost 40000 at 200 PLN/m²
@@ -1972,7 +1995,7 @@ class TestCommissionFraudPrevention:
         lead = self._create_signed_lead(api_client, rep_token, jitter=5)
         body = {
             "lead_id": lead["id"],
-            "signed_at": "2026-04-23",
+            "signed_at": yesterday_iso(),
             "buildings_count": 1,
             "building_type": "mieszkalny",
             "roof_area_m2": 200.0,
@@ -2167,7 +2190,7 @@ class TestCommissionFraudPrevention:
         # 100 m² * 275 = 27500 cost; gross 50000 → margin 22500 (81.8% → high)
         body = {
             "lead_id": lead["id"],
-            "signed_at": "2026-04-23",
+            "signed_at": yesterday_iso(),
             "buildings_count": 1,
             "building_type": "mieszkalny",
             "roof_area_m2": 100.0,
@@ -2190,9 +2213,15 @@ class TestCommissionFraudPrevention:
         except Exception:
             pass
         e = received[0]
+        # Sprint Batch 2 ISSUE-003 — broadcaster ships THIN payload only.
+        # is_high_margin remains a public flag (no PII, drives confetti UX).
+        # Detailed margin numbers (margin_pct_of_cost, computed_margin) are
+        # fetched via REST after the WS event arrives.
         assert e.get("is_high_margin") is True
-        assert e.get("margin_pct_of_cost") is not None and float(e["margin_pct_of_cost"]) >= 50.0
-        assert e.get("computed_margin") == 22500.0
+        assert "contract_id" in e
+        # PII / detailed numbers MUST NOT be in the broadcast frame
+        assert "margin_pct_of_cost" not in e
+        assert "computed_margin" not in e
         self._cleanup()
 
 
@@ -2308,7 +2337,7 @@ class TestDailyReport:
             headers={"Authorization": f"Bearer {rep_token}"},
             json={
                 "lead_id": lead["id"],
-                "signed_at": "2026-04-23",  # inside today's window for the test server
+                "signed_at": yesterday_iso(),  # inside today's window for the test server
                 "buildings_count": 1,
                 "building_type": "mieszkalny",
                 "roof_area_m2": 150.0,
@@ -2388,7 +2417,7 @@ class TestDailyReport:
             headers={"Authorization": f"Bearer {admin_token}"},
             json={
                 "lead_id": lead["id"],
-                "signed_at": "2026-04-23",
+                "signed_at": yesterday_iso(),
                 "buildings_count": 1,
                 "building_type": "mieszkalny",
                 "roof_area_m2": 200.0,  # cost 40000
@@ -2916,3 +2945,187 @@ class TestRateLimiting:
                 "slowapi upstream. To re-enable for an end-to-end check: unset "
                 "those env vars and restart backend."
             )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Sprint 5-pre ISSUE-017 — PUT /api/rep/location/batch
+# ═══════════════════════════════════════════════════════════════════════════
+class TestRepLocationBatch:
+    """The batch endpoint accepts the FULL list of locations gathered between
+    OS-deferred wakeups. Backward compat: the original single-point endpoint
+    must still work in parallel. All assertions use deltas (>>10m apart) so
+    none of them are dropped by the haversine dedup."""
+
+    def _stop(self, api_client, token):
+        """Best-effort stop tracking — soft-stops the rep_locations doc and
+        forces the next call to start a fresh session (track=[] on resume)."""
+        try:
+            api_client.delete(
+                f"{BASE_URL}/api/rep/location",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        except Exception:
+            pass
+
+    def _seed_session(self, api_client, token, lat=54.10, lng=18.10):
+        """Single-point seed → server flips is_active=True so subsequent
+        batches accumulate into the same session."""
+        r = api_client.put(
+            f"{BASE_URL}/api/rep/location",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"latitude": lat, "longitude": lng, "accuracy": 5.0},
+        )
+        assert r.status_code == 200, r.text
+
+    # 1) Auth gate — anon = 401
+    def test_batch_requires_auth(self, api_client):
+        r = api_client.put(
+            f"{BASE_URL}/api/rep/location/batch",
+            json={
+                "points": [
+                    {"latitude": 54.0, "longitude": 18.0, "accuracy": 10.0}
+                ]
+            },
+        )
+        assert r.status_code == 401, r.text
+
+    # 2) Empty batch → 400
+    def test_batch_empty_400(self, api_client, rep_token):
+        r = api_client.put(
+            f"{BASE_URL}/api/rep/location/batch",
+            headers={"Authorization": f"Bearer {rep_token}"},
+            json={"points": []},
+        )
+        assert r.status_code == 400, r.text
+        assert "co najmniej 1" in r.text or "1 punkt" in r.text
+
+    # 3) Happy path — 5 distinct points, all should append
+    def test_batch_appends_all_distinct_points(self, api_client, rep_token):
+        # Reset session so we start with a clean track
+        self._stop(api_client, rep_token)
+        # Seed a base point so is_active=True; subsequent batch shares the session
+        self._seed_session(api_client, rep_token, lat=54.20, lng=18.20)
+
+        # 5 points spaced ~110m apart in latitude (0.001 deg)
+        base_lat, base_lng = 54.21, 18.21
+        points = [
+            {
+                "latitude": base_lat + i * 0.001,
+                "longitude": base_lng,
+                "accuracy": 5.0,
+                "ts": f"2026-04-25T10:{i:02d}:00+00:00",
+            }
+            for i in range(5)
+        ]
+        r = api_client.put(
+            f"{BASE_URL}/api/rep/location/batch",
+            headers={"Authorization": f"Bearer {rep_token}"},
+            json={"points": points},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["ok"] is True
+        # All 5 points >>10m apart from each other and from seed → all appended
+        assert body["received"] == 5
+        assert body["appended"] == 5
+        # track_len includes the seed (1) + the 5 batch points = 6 minimum
+        assert body["track_len"] >= 6, body
+        self._stop(api_client, rep_token)
+
+    # 4) Dedup — back-to-back identical points are dropped
+    def test_batch_dedupes_near_identical(self, api_client, rep_token):
+        self._stop(api_client, rep_token)
+        self._seed_session(api_client, rep_token, lat=54.30, lng=18.30)
+
+        # 4 points within ~0.5m of one another (delta < MIN_TRACK_DELTA_METERS=10)
+        points = [
+            {
+                "latitude": 54.31 + i * 0.0000001,
+                "longitude": 18.31,
+                "accuracy": 5.0,
+            }
+            for i in range(4)
+        ]
+        r = api_client.put(
+            f"{BASE_URL}/api/rep/location/batch",
+            headers={"Authorization": f"Bearer {rep_token}"},
+            json={"points": points},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        # First point may append (>>10m from seed), the next 3 must dedup
+        assert body["received"] == 4
+        assert body["appended"] <= 1, body
+        self._stop(api_client, rep_token)
+
+    # 5) Cap — ask for >MAX_BATCH_POINTS → 400
+    def test_batch_over_cap_400(self, api_client, rep_token):
+        points = [
+            {"latitude": 53.0 + i * 0.0001, "longitude": 18.0, "accuracy": 5.0}
+            for i in range(101)
+        ]
+        r = api_client.put(
+            f"{BASE_URL}/api/rep/location/batch",
+            headers={"Authorization": f"Bearer {rep_token}"},
+            json={"points": points},
+        )
+        assert r.status_code == 400, r.text
+        assert "100" in r.text
+
+    # 6) Backward compat — old single-point PUT /rep/location still 200
+    def test_single_point_endpoint_still_works(self, api_client, rep_token):
+        self._stop(api_client, rep_token)
+        r = api_client.put(
+            f"{BASE_URL}/api/rep/location",
+            headers={"Authorization": f"Bearer {rep_token}"},
+            json={"latitude": 54.40, "longitude": 18.40, "accuracy": 5.0},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["ok"] is True
+        # Single endpoint preserves the historical "track_len" contract
+        assert "track_len" in body
+        assert body["track_len"] >= 1
+        self._stop(api_client, rep_token)
+
+    # 7) Manager dashboard sees the rep after batch upload
+    def test_dashboard_manager_picks_up_batch_position(
+        self, api_client, rep_token, manager_token
+    ):
+        self._stop(api_client, rep_token)
+        # Seed + send a 3-point batch
+        self._seed_session(api_client, rep_token, lat=54.50, lng=18.50)
+        points = [
+            {
+                "latitude": 54.51 + i * 0.001,
+                "longitude": 18.51,
+                "accuracy": 5.0,
+            }
+            for i in range(3)
+        ]
+        r = api_client.put(
+            f"{BASE_URL}/api/rep/location/batch",
+            headers={"Authorization": f"Bearer {rep_token}"},
+            json={"points": points},
+        )
+        assert r.status_code == 200, r.text
+
+        # Manager dashboard must reflect the rep with the LATEST batch point
+        d = api_client.get(
+            f"{BASE_URL}/api/dashboard/manager",
+            headers={"Authorization": f"Bearer {manager_token}"},
+        )
+        assert d.status_code == 200, d.text
+        reps_live = d.json().get("reps_live", [])
+        # Find the rep doc — handlowiec@test.com
+        me = api_client.get(
+            f"{BASE_URL}/api/auth/me",
+            headers={"Authorization": f"Bearer {rep_token}"},
+        ).json()
+        my_doc = next((x for x in reps_live if x.get("user_id") == me["id"]), None)
+        assert my_doc is not None, f"rep {me['id']} not in reps_live"
+        # Last batch point lat = 54.51 + 0.002 = 54.512.
+        # Manager dashboard uses `lat`/`lng` field names (legacy GeoJSON-ish).
+        assert abs(float(my_doc.get("lat")) - 54.512) < 0.0001, my_doc
+        self._stop(api_client, rep_token)
+

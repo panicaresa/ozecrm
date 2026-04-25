@@ -60,6 +60,11 @@ export interface QueueOp {
 const STORAGE_KEY = "oze_offline_queue_v1";
 const PENDING_DIR = `${FileSystem.documentDirectory || ""}pending_leads/`;
 const AUTO_SYNC_INTERVAL_MS = 15_000;
+// Sprint 5-pre ISSUE-014 — items stuck in "syncing" longer than this are
+// considered stale (almost certainly because the JS bundle was killed
+// mid-flight: app force-quit, crash, OS-evicted) and need to be re-queued
+// on next startup so the user doesn't get a stuck queue.
+const STALE_SYNCING_MS = 5 * 60 * 1000;
 
 // ── Internal state ───────────────────────────────────────────────────────────
 
@@ -250,6 +255,54 @@ export async function removeOp(id: string): Promise<void> {
   await writeQueue(next);
 }
 
+// Sprint 5-pre ISSUE-014 — Reset items stuck in "syncing" past the threshold.
+// Background:
+//   syncOne() flips an op to "syncing" before the network call. If the JS
+//   bundle is killed mid-flight (force-quit, OS eviction, native crash) the
+//   op stays at "syncing" forever and the rest of the queue is silently
+//   skipped by the "if (op.status !== 'pending') continue" guard in
+//   syncNow(). This produces a queue deadlock that only the user can
+//   notice (Sync Status screen never empties). Resetting on startup +
+//   periodically restores the pending state without losing data.
+//
+//   Items still in `syncing` but younger than maxAgeMs are NOT touched —
+//   that's a legitimate in-flight sync from another invocation.
+//
+// Returns the number of ops that were reset.
+export async function resetStaleSyncing(
+  maxAgeMs: number = STALE_SYNCING_MS
+): Promise<number> {
+  const ops = await readQueue();
+  if (ops.length === 0) return 0;
+  const cutoff = Date.now() - maxAgeMs;
+  let resetCount = 0;
+  const next = ops.map((op) => {
+    if (op.status !== "syncing") return op;
+    const tsRaw = op.last_attempt_at;
+    const tsMs = tsRaw ? Date.parse(tsRaw) : 0;
+    // Treat unparseable / very old timestamps as stale.
+    if (!Number.isFinite(tsMs) || tsMs < cutoff) {
+      resetCount += 1;
+      return {
+        ...op,
+        status: "pending" as QueueOpStatus,
+        last_error: `auto-reset: stuck in syncing > ${Math.round(
+          maxAgeMs / 60_000
+        )}min`,
+      };
+    }
+    return op;
+  });
+  if (resetCount > 0) {
+    await writeQueue(next);
+    // eslint-disable-next-line no-console
+    console.log(
+      `offlineQueue: resetStaleSyncing reset ${resetCount} stuck op(s)`
+    );
+  }
+  return resetCount;
+}
+
 export async function retryOp(
   id: string,
   overrides?: { confirmed_nearby_duplicate?: boolean; apartment_number?: string }
@@ -381,9 +434,20 @@ export async function syncNow(): Promise<{ synced: number; failed: number; confl
 export function startAutoSync(): () => void {
   // Cleanup orphaned photos on startup (fire-and-forget)
   cleanupOrphanedPhotos().catch(() => {});
+  // Sprint 5-pre ISSUE-014 — recover any items left in "syncing" by a
+  // previous app process that died mid-flight, then resume normal sync.
+  resetStaleSyncing().catch(() => {});
 
   const interval = setInterval(() => {
-    syncNow().catch(() => {});
+    // Periodic safety net — a "syncing" item that survives the 15s tick
+    // multiple times will be re-pickable after STALE_SYNCING_MS even if
+    // startup recovery never ran (e.g. the ghost item appeared mid-session
+    // because the network/HTTP client itself stalled).
+    resetStaleSyncing()
+      .catch(() => {})
+      .finally(() => {
+        syncNow().catch(() => {});
+      });
   }, AUTO_SYNC_INTERVAL_MS);
 
   const appSub = AppState.addEventListener("change", (s) => {

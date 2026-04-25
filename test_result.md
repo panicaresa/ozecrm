@@ -639,11 +639,119 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Sprint 4 — rep activity status (active/idle/offline) + Manager status filter chips + cosmetic cluster"
+    - "Sprint 5-pre — Batch GPS endpoint + offline queue stale syncing reset + 8 date-flake test fixes"
   stuck_tasks:
     - "Faza 2.0 GET /api/tracking/track/{rep_id} role-scoped"
   test_all: false
   test_priority: "high_first"
+
+# --- Sprint 5-pre (2026-04-25) — Critical pre-APK MVP fixes ---
+sprint_5_pre:
+  - task: "Sprint 5-pre — Task 1: Photo compression on online POST /leads (DONE in prior session)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(rep)/add-lead.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Previous-session fix. compressPhoto() called before online POST /leads
+          and timeout extended to 30s. Verified by tsc --noEmit and bundler.
+          Not affected by Sprint 5-pre Task 2/3 work.
+
+  - task: "Sprint 5-pre — Task 2: resetStaleSyncing in offline queue (ISSUE-014)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/lib/offlineQueue.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Added resetStaleSyncing(maxAgeMs = 5 * 60_000) to /app/frontend/src/lib/offlineQueue.ts.
+          For each op with status="syncing" and last_attempt_at older than 5 min (or unparsable
+          timestamp / no timestamp), the function flips it back to "pending" and stamps a
+          last_error="auto-reset: stuck in syncing > 5min" so the user gets visibility on the
+          /sync-status screen.
+          Wired into startAutoSync() to fire ONCE on app boot AND on every 15s tick (cheap —
+          the function early-returns when there are no syncing ops). This eliminates the
+          deadlock where a force-killed/crashed JS bundle leaves an op forever stuck and the
+          rest of the queue is silently skipped (because of "if op.status !== 'pending' continue"
+          guard in syncNow()).
+          Returns count of reset ops; logs "offlineQueue: resetStaleSyncing reset N stuck op(s)"
+          so it's traceable in dev console / logcat.
+
+  - task: "Sprint 5-pre — Task 3: PUT /api/rep/location/batch (ISSUE-017)"
+    implemented: true
+    working: "NA"
+    file: "/app/backend/server.py + /app/frontend/src/lib/backgroundTracking.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Backend (/app/backend/server.py):
+            - New models RepLocationBatchPoint + RepLocationBatchIn (list of points with
+              optional ts ISO timestamp).
+            - New endpoint PUT /api/rep/location/batch (rate-limited 60/min per token,
+              same as single-point sibling). Loops over all incoming points applying the
+              SAME haversine dedup rule (>=10m), MAX_TRACK_POINTS=500 cap, midnight
+              session reset, and session_distance accumulator that the single-point
+              endpoint uses. Single Mongo update_one + single WS broadcast at the end.
+              Cap: max 100 points per batch (returns 400 if exceeded).
+              Empty batch: 400 "Batch musi zawierać co najmniej 1 punkt".
+            - Backward compat: original PUT /api/rep/location remains untouched and
+              functional in parallel (verified by test_single_point_endpoint_still_works).
+          Frontend (/app/frontend/src/lib/backgroundTracking.ts):
+            - TaskManager.defineTask now maps the FULL `locations` array from expo-location
+              into a `points` payload (latitude, longitude, accuracy, ts derived from
+              loc.timestamp) and PUTs to /api/rep/location/batch instead of just
+              dropping the most recent point at /api/rep/location.
+            - Fixes manager polyline gaps caused by OS-coalesced background updates.
+          Tests:
+            - 7 new tests in TestRepLocationBatch class:
+              1. test_batch_requires_auth (anon → 401)
+              2. test_batch_empty_400 (empty list → 400)
+              3. test_batch_appends_all_distinct_points (5 distinct points → all appended)
+              4. test_batch_dedupes_near_identical (4 points within ~0.5m → all but one
+                 deduped by haversine)
+              5. test_batch_over_cap_400 (101 points → 400 with "100" in error)
+              6. test_single_point_endpoint_still_works (backward compat smoke)
+              7. test_dashboard_manager_picks_up_batch_position (manager reps_live[].lat
+                 reflects the LAST batch point)
+          Verification: 94 passed, 2 skipped, 0 failed (was 79/8/2).
+
+  - task: "Sprint 5-pre — date-flake test cleanup (yesterday_iso helper)"
+    implemented: true
+    working: true
+    file: "/app/backend/tests/test_oze_crm_api.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Added yesterday_iso() and today_iso() helpers at top of the file.
+          Replaced all 10 hardcoded `"signed_at": "2026-04-23"` literals with calls to
+          yesterday_iso() (10 occurrences across TestContractSignedEvent,
+          TestCommissionFraudPrevention, TestDailyReport).
+          Also updated 2 stale broadcast-payload tests that were checking for fields the
+          Batch 2 audit removed (PII filter — broadcaster ships THIN payload only):
+          - test_contract_post_broadcasts_contract_signed: now asserts thin payload
+            (contract_id, is_high_margin, signed_at) and explicitly verifies that
+            client_name / gross_amount / commission_amount are NOT present.
+          - test_high_margin_flag_in_broadcast: same — drops margin_pct_of_cost and
+            computed_margin asserts (those are server-internal only now).
+          Result: from 79 passed / 8 failed / 2 skipped → 94 passed / 0 failed / 2 skipped.
+
 
 # --- Sprint 4 (2026-04-24) ---
 sprint_4:
@@ -1910,3 +2018,118 @@ metadata:
   dev_compatibility: "admin@test.com / test1234 login still works — verified"
 
       No blockers. Endpoint is production-ready.
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SPRINT 5-PRE — Pre-APK MVP critical fixes (2026-04-25)
+# ──────────────────────────────────────────────────────────────────────────────
+sprint_5_pre_summary:
+  date: "2026-04-25"
+  scope: "ISSUE-014 (offline queue stuck syncing) + ISSUE-017 (GPS batch) + 8 date-flake test fixes"
+  baseline_before: "79 passed / 8 failed / 2 skipped"
+  baseline_after: "94 passed / 0 failed / 2 skipped"
+  files_touched:
+    - "/app/frontend/src/lib/offlineQueue.ts (+resetStaleSyncing, wired into startAutoSync)"
+    - "/app/backend/server.py (+RepLocationBatchPoint/RepLocationBatchIn models, +PUT /api/rep/location/batch endpoint)"
+    - "/app/frontend/src/lib/backgroundTracking.ts (TaskManager now PUTs full batch instead of last point)"
+    - "/app/backend/tests/test_oze_crm_api.py (+yesterday_iso/today_iso helpers, +TestRepLocationBatch class with 7 tests, fixed PII broadcast assertions in 2 tests, replaced 10× hardcoded 2026-04-23 dates with helper)"
+  backward_compat_verified: |
+    Old PUT /api/rep/location remains untouched. test_single_point_endpoint_still_works
+    confirms 200 OK + track_len contract intact. Both endpoints write to the same
+    rep_locations doc.
+  agent_handoff_for_next:
+    -agent: "main"
+    -message: |
+      Sprint 5-pre Tasks 2 + 3 complete + 8 date-flake tests fixed.
+      
+      Task 2 (ISSUE-014, frontend only):
+        offlineQueue.ts now has resetStaleSyncing(maxAgeMs=5*60_000). Hooked
+        into startAutoSync() — runs once at boot AND on every 15s tick.
+        Re-queues stuck "syncing" ops back to "pending" so the queue can
+        resume after a force-quit/crash mid-flight.
+      
+      Task 3 (ISSUE-017, full stack + tests):
+        Backend: PUT /api/rep/location/batch + RepLocationBatchIn model.
+        Old PUT /api/rep/location preserved 100% intact for backward compat.
+        Same haversine 10m dedup, MAX_TRACK_POINTS=500 cap, midnight session
+        rollover, single Mongo write, single WS broadcast at end.
+        Hard cap 100 points/batch (400 if exceeded), empty list (400).
+        Frontend: backgroundTracking.ts now sends the FULL batch from
+        TaskManager (was: only locations[locations.length-1]).
+        Tests: +7 new in TestRepLocationBatch (auth gate, empty,
+        distinct-points, dedup, cap, single-point backward compat,
+        manager dashboard reflects batch tail).
+      
+      Plus: yesterday_iso() helper at top of test file. Replaced all 10
+      "2026-04-23" hardcodes with helper calls. Updated 2 stale broadcast
+      tests that were checking PII fields removed by Batch 2 audit
+      (now assert thin payload only).
+      
+      Result: 79 passed / 8 failed / 2 skipped → 94 passed / 0 failed / 2 skipped.
+      yarn tsc --noEmit: 0 errors. Backend reloads clean.
+      
+      No frontend automatic testing requested by user. Awaiting user manual
+      verification in preview / on real device with APK.
+
+  - agent: "testing"
+    message: |
+      Sprint 5-pre — Backend testing of NEW PUT /api/rep/location/batch endpoint
+      and backward-compat with PUT /api/rep/location.
+      Test scripts: pytest /app/backend/tests/test_oze_crm_api.py + manual
+      smoke tests in /app/backend_test_sprint5pre.py (against the public
+      EXPO_PUBLIC_BACKEND_URL).
+
+      ✅ PYTEST FULL SUITE
+        Result: 94 passed, 2 skipped, 0 failed (in 56.48s) — exactly as
+        expected. All 7 tests in the new TestRepLocationBatch class pass:
+          - test_batch_requires_auth ✅
+          - test_batch_empty_400 ✅
+          - test_batch_appends_all_distinct_points ✅
+          - test_batch_dedupes_near_identical ✅
+          - test_batch_over_cap_400 ✅
+          - test_single_point_endpoint_still_works ✅
+          - test_dashboard_manager_picks_up_batch_position ✅
+
+      ✅ MANUAL CURL SMOKE TESTS (against public BASE_URL)
+        (a) PUT /api/rep/location/batch unauthenticated → 401 ✅
+        (b) Empty {points: []} as handlowiec →
+            400 {"detail":"Batch musi zawierać co najmniej 1 punkt."} ✅
+            (matches required Polish message "co najmniej 1" / "1 punkt")
+        (c) 5 distinct points (52.10..52.104, lon 21.00) as handlowiec →
+            200 {ok:true, received:5, appended:5, track_len:5} ✅
+        (d) 4 near-identical points (~0.5m apart) →
+            200 {ok:true, received:4, appended:1, track_len:1} →
+            3 deduped by haversine (appended <= 1 ✅)
+        (e) 101 points →
+            400 {"detail":"Batch może zawierać maksymalnie 100 punktów."} ✅
+            (contains "100" as required)
+        (f) BACKWARD COMPAT: single-point PUT /api/rep/location as
+            handlowiec with {lat:52.20, lng:21.05, accuracy:5} →
+            200 {ok:true, track_len:1} ✅ (track_len present)
+
+      ✅ SCENARIO 3: Manager dashboard picks up LAST batch point
+        After re-uploading the 5-point batch, GET /api/dashboard/manager
+        as manager → reps_live[handlowiec].lat == 52.104 (the LAST point
+        in the batch) ✅. Verified entry:
+          {user_id, name:"Jan Handlowiec", lat:52.104, lng:21.0,
+           accuracy:5, active:true, session_distance_m:444.8,
+           activity_status:"active"}.
+        This proves a single batch upload propagates to the manager
+        dashboard with the last position visible (no reliance on the
+        single-point endpoint).
+
+      ✅ CONFIRMATION: Both endpoints work in PARALLEL
+        Pytest test_single_point_endpoint_still_works PASSES (tests both
+        endpoints in same flow). Manual scenario (f) confirms the OLD
+        single-point endpoint returns 200 with track_len. New batch
+        endpoint runs alongside it without interference. Dedup, MAX 500
+        cap and midnight session reset are shared between them.
+
+      All 19 manual assertions PASS / 0 FAIL.
+      Cleanup: DELETE /api/rep/location was issued before each scenario
+      and at the end. No test residue.
+
+      No unexpected behaviour observed. Sprint 5-pre Task 3 is fully
+      green from the backend side. (Task 2 — offline queue
+      resetStaleSyncing — is frontend-only and was explicitly excluded
+      from this run per spec.)

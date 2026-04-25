@@ -330,6 +330,20 @@ class RepLocationIn(BaseModel):
     battery_state: Optional[str] = None  # charging|unplugged|full|unknown
 
 
+# --- Sprint 5-pre ISSUE-017 — batch GPS endpoint for background tracking ---
+class RepLocationBatchPoint(BaseModel):
+    latitude: float
+    longitude: float
+    accuracy: Optional[float] = None
+    battery: Optional[float] = None
+    battery_state: Optional[str] = None
+    ts: Optional[str] = None  # ISO 8601 from device clock; server uses now() if absent
+
+
+class RepLocationBatchIn(BaseModel):
+    points: List[RepLocationBatchPoint]
+
+
 # --- Contracts (Faza 1.7) ---
 FINANCING_TYPES = ("credit", "cash")
 WITHDRAWAL_DAYS = 14
@@ -938,6 +952,128 @@ async def stop_rep_tracking(user: Dict[str, Any] = Depends(require_roles("handlo
     except Exception as e:
         logger.warning(f"WS broadcast failed: {e}")
     return {"ok": True}
+
+
+# Sprint 5-pre ISSUE-017 — batch endpoint for background tracking. Background
+# task collects multiple GPS pings between OS-deferred wakeups and previously
+# only the LAST one was uploaded, leaving gaps in the manager polyline. This
+# endpoint accepts the full batch in one HTTP call and applies the same
+# dedup/cap rules as the single-point endpoint, point by point.
+#
+# IMPORTANT — backward compat: the original PUT /api/rep/location remains
+# unchanged for any older clients still in the field. The two endpoints write
+# to the same `rep_locations` document; concurrent calls from the same user
+# are safe because Mongo update_one with $set is atomic and our in-memory
+# accumulator only mutates the local `track` list.
+MAX_BATCH_POINTS = 100
+
+
+@api.put("/rep/location/batch")
+@limiter.limit("60/minute", key_func=_user_or_ip_key)
+async def push_rep_location_batch(
+    request: Request,
+    body: RepLocationBatchIn,
+    user: Dict[str, Any] = Depends(require_roles("handlowiec", "manager", "admin")),
+):
+    if not body.points:
+        raise HTTPException(status_code=400, detail="Batch musi zawierać co najmniej 1 punkt.")
+    if len(body.points) > MAX_BATCH_POINTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Batch może zawierać maksymalnie {MAX_BATCH_POINTS} punktów.",
+        )
+
+    ts = now()
+    prev = await db.rep_locations.find_one({"user_id": user["id"]}, {"_id": 0})
+    track: List[Dict[str, Any]] = list(prev.get("track", [])) if prev else []
+    session_distance_m = float(prev.get("session_distance_m") or 0.0) if prev else 0.0
+    session_started_at = prev.get("session_started_at") if prev else None
+    was_active = bool(prev.get("is_active")) if prev else False
+
+    if not was_active:
+        session_distance_m = 0.0
+        session_started_at = ts
+        track = []
+    elif track:
+        last_ts_raw = track[-1].get("t")
+        if last_ts_raw:
+            try:
+                last_ts = datetime.fromisoformat(last_ts_raw.replace("Z", "+00:00"))
+                if last_ts.date() != ts.date():
+                    track = []
+                    session_distance_m = 0.0
+                    session_started_at = ts
+            except Exception:
+                pass
+
+    # Sort batch by ts (best-effort — None values sort first as "")
+    def _sort_key(p: RepLocationBatchPoint) -> str:
+        return p.ts or ""
+
+    sorted_points = sorted(body.points, key=_sort_key)
+    appended_count = 0
+
+    for p in sorted_points:
+        # Use point's ts when provided; else stamp with arrival ts so older
+        # points still get an ordered timestamp.
+        point_ts_iso = p.ts or ts.isoformat()
+        add_point = True
+        if track:
+            last = track[-1]
+            delta = _haversine_m(last["lat"], last["lng"], p.latitude, p.longitude)
+            if delta < MIN_TRACK_DELTA_METERS:
+                add_point = False
+            else:
+                session_distance_m += delta
+        if add_point:
+            track.append({"lat": p.latitude, "lng": p.longitude, "t": point_ts_iso})
+            if len(track) > MAX_TRACK_POINTS:
+                track = track[-MAX_TRACK_POINTS:]
+            appended_count += 1
+
+    # The last (most recent) point is the canonical lat/lng/battery snapshot.
+    final = sorted_points[-1]
+    doc = {
+        "user_id": user["id"],
+        "latitude": final.latitude,
+        "longitude": final.longitude,
+        "accuracy": final.accuracy,
+        "battery": final.battery,
+        "battery_state": final.battery_state,
+        "is_active": True,
+        "updated_at": ts,
+        "track": track,
+        "session_started_at": session_started_at,
+        "session_distance_m": round(session_distance_m, 2),
+    }
+    await db.rep_locations.update_one({"user_id": user["id"]}, {"$set": doc}, upsert=True)
+    await _bump_last_action(user)
+
+    try:
+        await broadcaster.broadcast(
+            "location_update",
+            {
+                "rep_id": user["id"],
+                "rep_name": user.get("name") or user.get("email"),
+                "latitude": final.latitude,
+                "longitude": final.longitude,
+                "battery": final.battery,
+                "is_active": True,
+                "updated_at": ts.isoformat(),
+                "appended": appended_count > 0,
+                "batch_size": appended_count,
+            },
+            rep_id=user["id"],
+        )
+    except Exception as e:
+        logger.warning(f"WS broadcast failed: {e}")
+
+    return {
+        "ok": True,
+        "track_len": len(track),
+        "appended": appended_count,
+        "received": len(body.points),
+    }
 
 
 @api.get("/rep/work-status")

@@ -32,25 +32,35 @@ TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
   const backend = getBackendUrl();
   if (!backend) return;
 
-  // Push most recent location to backend
-  const loc = locations[locations.length - 1];
+  // Sprint 5-pre ISSUE-017 — push the FULL batch to /api/rep/location/batch
+  // so the manager's polyline doesn't lose interim points whenever the OS
+  // wakes us up with multiple coalesced location updates. The single-point
+  // endpoint at /api/rep/location remains the public fallback for older
+  // clients still in the field; this background task always uses the batch
+  // path which is strictly a superset of the single-point behaviour.
+  const points = locations.map((loc) => ({
+    latitude: loc.coords.latitude,
+    longitude: loc.coords.longitude,
+    accuracy: loc.coords.accuracy ?? null,
+    battery: null,
+    battery_state: "unknown",
+    ts:
+      typeof loc.timestamp === "number"
+        ? new Date(loc.timestamp).toISOString()
+        : null,
+  }));
+
   try {
-    await fetch(`${backend}/api/rep/location`, {
+    await fetch(`${backend}/api/rep/location/batch`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({
-        latitude: loc.coords.latitude,
-        longitude: loc.coords.longitude,
-        accuracy: loc.coords.accuracy ?? null,
-        battery: null,
-        battery_state: "unknown",
-      }),
+      body: JSON.stringify({ points }),
     });
   } catch (e) {
-    console.warn("[BG-LOC] push failed", e);
+    console.warn("[BG-LOC] batch push failed", e);
   }
 });
 
