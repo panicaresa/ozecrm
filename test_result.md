@@ -639,11 +639,79 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Sprint 5-pre-bis — UX cluster: auto-status, full-screen map, calc collapsed, progress max-5, dashboard reorder"
+    - "Sprint 5-pre-tris — debug + fixes after user testing (map-fullscreen styling, auto-status frontend refetch)"
   stuck_tasks:
     - "Faza 2.0 GET /api/tracking/track/{rep_id} role-scoped"
   test_all: false
   test_priority: "high_first"
+
+# --- Sprint 5-pre-tris (2026-04-25 12:00) — bugfixes from user preview testing ---
+sprint_5_pre_tris:
+  - task: "Fix map-fullscreen styling — chips ballooning, map small"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/map-fullscreen.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          ROOT CAUSE: horizontal ScrollView without explicit container height
+          inherited flex:1 from its SafeAreaView parent and ballooned to ~40%
+          of the viewport. Outer ScrollView wrapping the map then split the
+          remaining space, leaving the map at ~40%.
+          
+          FIX: 
+          a) Wrapped the chips ScrollView in a fixed-height (56px) View
+             ("statusFilterWrapper") with flexShrink:0 so it cannot grow.
+          b) Each chip got fixed height:36 + paddingVertical:0.
+          c) Dropped the outer ScrollView wrap around <LeadMap /> and
+             replaced with a flex:1 mapContainer View. The map's own
+             internal scroll handles list overflow on web.
+          d) Computed mapHeight = window.height - 56 - 56 - safeArea
+             insets (top+bottom). Min clamp 320. useSafeAreaInsets()
+             added.
+          
+          Visual smoke confirmed via two screenshots: header ~56px,
+          chips strip ~56px (single row), map fills the remaining ~720px+.
+
+  - task: "Fix auto-status not visible in UI — frontend refetch on focus"
+    implemented: true
+    working: true
+    file: "Multiple files (LeadDetailScreen + my-leads + (manager)/leads + (rep)/index)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          ROOT CAUSE: Backend was 100% correct — logs (verified) show
+          "Lead <id> status auto-changed: umowione → podpisana" entries
+          for every POST /contracts. The issue was purely frontend:
+          screens used useEffect with [load] dependency (runs once on
+          mount only) and never re-fetched when navigating BACK from
+          /add-contract. The user saw stale "umowione" status because
+          the lead detail / leads list screens cached the pre-contract
+          response.
+          
+          FIX: Added useFocusEffect (from "expo-router") to:
+            - /app/frontend/src/components/LeadDetailScreen.tsx
+            - /app/frontend/app/(rep)/my-leads.tsx
+            - /app/frontend/app/(manager)/leads.tsx
+            - /app/frontend/app/(rep)/index.tsx (rep dashboard summary)
+          
+          Each refetches its data 50ms after the screen receives focus,
+          regardless of whether the user navigated forward or back.
+          The 50ms delay is intentional — avoids racing the initial-mount
+          useEffect on first paint.
+          
+          Backend logs confirm auto-status was already firing before this
+          fix (timestamps 11:30, 11:52, 12:05 — all post-Sprint 5-pre-bis
+          deploy). No backend changes were needed.
+
 
 # --- Sprint 5-pre-bis (2026-04-25) — UX polish before APK MVP ---
 sprint_5_pre_bis:

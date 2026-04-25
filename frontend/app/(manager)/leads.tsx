@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, Linking, Platform } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
-import { useRouter, useLocalSearchParams } from "expo-router";
+import { useRouter, useLocalSearchParams, useFocusEffect } from "expo-router";
 import { api, formatApiError } from "../../src/lib/api";
 import { colors, radius, spacing } from "../../src/theme";
 import { LeadCard, Lead } from "../../src/components/LeadCard";
@@ -125,6 +125,16 @@ export default function ManagerLeads() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Sprint 5-pre-tris (ISSUE-UX-001 follow-up): refetch on every focus so
+  // post-contract auto-status flips ("podpisana") are reflected when the
+  // user returns from any nested screen (rep profile, lead detail, etc.).
+  useFocusEffect(
+    useCallback(() => {
+      const t = setTimeout(() => load(), 50);
+      return () => clearTimeout(t);
+    }, [load])
+  );
 
   const primaryFilters = useMemo(() => buildPrimaryFilters(leads), [leads]);
   const repFilters = useMemo(() => buildRepFilters(reps, leads), [reps, leads]);

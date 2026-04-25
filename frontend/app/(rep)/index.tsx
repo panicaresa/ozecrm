@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from "react";
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert, Platform } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import * as Location from "expo-location";
 import * as Battery from "expo-battery";
 import { startBackgroundTracking, stopBackgroundTracking, isBackgroundTrackingActive } from "../../src/lib/backgroundTracking";
@@ -140,6 +140,16 @@ export default function RepHome() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Sprint 5-pre-tris (ISSUE-UX-001 follow-up): refetch dashboard summary on
+  // every focus so newly-signed contracts (KPIs: signed/total) reflect
+  // immediately when the user returns from /add-contract.
+  useFocusEffect(
+    useCallback(() => {
+      const t = setTimeout(() => load(), 50);
+      return () => clearTimeout(t);
+    }, [load])
+  );
 
   const handleLogout = async () => {
     await logout();

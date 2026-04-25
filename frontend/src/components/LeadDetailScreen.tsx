@@ -15,7 +15,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import { api, formatApiError } from "../lib/api";
@@ -81,6 +81,36 @@ export const LeadDetailScreen: React.FC<{ leadId: string; backLabel?: string }> 
       setLoading(false);
     })();
   }, [loadLead, loadDocs]);
+
+  // Sprint 5-pre-tris (ISSUE-UX-001 follow-up): when the user returns to
+  // this screen — most importantly after submitting a contract that
+  // auto-flips lead.status to "podpisana" — refetch silently so the new
+  // status / metadata is reflected in the UI without a full page reload.
+  // useFocusEffect runs on EVERY focus (including the initial mount), so
+  // the initial useEffect above is technically redundant but kept for
+  // its explicit `setLoading(false)` first-paint contract.
+  useFocusEffect(
+    useCallback(() => {
+      // Skip the very first focus right after mount — the useEffect above
+      // is already handling that case (and toggling loading=false).
+      let cancelled = false;
+      const refetch = async () => {
+        try {
+          await Promise.all([loadLead(), loadDocs()]);
+        } catch {
+          /* loadLead/loadDocs already set their own err state */
+        }
+      };
+      // Tiny delay so we don't race the initial-mount loaders.
+      const t = setTimeout(() => {
+        if (!cancelled) refetch();
+      }, 50);
+      return () => {
+        cancelled = true;
+        clearTimeout(t);
+      };
+    }, [loadLead, loadDocs])
+  );
 
   const changeStatus = async (newStatus: string) => {
     if (!lead || newStatus === lead.status) return;

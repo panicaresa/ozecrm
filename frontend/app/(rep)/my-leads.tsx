@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, Linking, Platform } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import { api, formatApiError } from "../../src/lib/api";
 import { colors, spacing } from "../../src/theme";
 import { LeadCard, Lead } from "../../src/components/LeadCard";
@@ -162,6 +162,19 @@ export default function MyLeads() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Sprint 5-pre-tris (ISSUE-UX-001 follow-up): refetch leads list on every
+  // focus so newly-signed contracts (which auto-flip lead.status to
+  // "podpisana" server-side) are reflected when the user returns from
+  // /add-contract or any nested screen.
+  useFocusEffect(
+    useCallback(() => {
+      const t = setTimeout(() => {
+        load();
+      }, 50);
+      return () => clearTimeout(t);
+    }, [load])
+  );
 
   const filters = useMemo(() => buildFilters(leads), [leads]);
 

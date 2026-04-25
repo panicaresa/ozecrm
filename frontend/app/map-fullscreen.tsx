@@ -18,7 +18,7 @@ import {
   ScrollView,
   Dimensions,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import { useRouter, useLocalSearchParams, Stack } from "expo-router";
 import { colors, radius, spacing, statusColor, statusLabel } from "../src/theme";
@@ -36,6 +36,7 @@ interface DashboardData {
 export default function MapFullscreen() {
   const router = useRouter();
   const { user } = useAuth();
+  const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ filter_status?: string; rep_id?: string }>();
   const initialStatus = typeof params.filter_status === "string" ? params.filter_status : null;
   const initialRepId = typeof params.rep_id === "string" ? params.rep_id : null;
@@ -150,10 +151,16 @@ export default function MapFullscreen() {
     });
   }, [data?.pins, filterStatus, filterRepId, leads]);
 
-  // Map height: most of the screen minus the header + filter strip.
-  // 200px subtracted is conservative for header (44) + chip strip (42) +
-  // safe-area padding + small bottom margin.
-  const mapHeight = Math.max(420, Dimensions.get("window").height - 200);
+  // Sprint 5-pre-bis (ISSUE-UX-002 v2): map gets ALL remaining vertical space
+  // after the header (~56) and the chips strip (~56). Subtract safe-area
+  // insets for proper rendering on devices with home indicator / notch.
+  // 56 (header) + 56 (chips) = 112; the rest goes to the map.
+  const HEADER_H = 56;
+  const CHIPS_H = 56;
+  const mapHeight = Math.max(
+    320,
+    Dimensions.get("window").height - HEADER_H - CHIPS_H - insets.top - insets.bottom
+  );
 
   return (
     <>
@@ -186,65 +193,74 @@ export default function MapFullscreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Status filter chips — same set the dashboard exposes */}
+        {/* Status filter chips — same set the dashboard exposes.
+            Sprint 5-pre-bis-tris (ISSUE styling fix): wrapped in a
+            fixed-height (56) View so the horizontal ScrollView doesn't
+            inherit `flex: 1` from its parent and balloon out to half the
+            screen as it did in the first build. */}
         {!loading && data && (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.statusFilterRow}
-            testID="map-fs-status-chips"
-          >
-            <TouchableOpacity
-              onPress={() => {
-                setFilterStatus(null);
-                setSelectedPinId(null);
-              }}
-              style={[styles.statusChip, !filterStatus && styles.statusChipActive]}
-              activeOpacity={0.85}
-              testID="map-fs-chip-all"
+          <View style={styles.statusFilterWrapper}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.statusFilterRow}
+              testID="map-fs-status-chips"
             >
-              <Text style={[styles.statusChipText, !filterStatus && { color: "#fff" }]}>
-                Wszystkie ({(data?.pins || []).length})
-              </Text>
-            </TouchableOpacity>
-            {(["nowy", "umowione", "decyzja", "podpisana", "nie_zainteresowany"] as const).map(
-              (s) => {
-                const count = (data?.pins || []).filter((p: any) => p.status === s).length;
-                const active = filterStatus === s;
-                const sc = statusColor[s] || colors.textSecondary;
-                return (
-                  <TouchableOpacity
-                    key={s}
-                    onPress={() => {
-                      setFilterStatus(active ? null : s);
-                      setSelectedPinId(null);
-                    }}
-                    style={[
-                      styles.statusChip,
-                      active && { backgroundColor: sc, borderColor: sc },
-                    ]}
-                    activeOpacity={0.85}
-                    testID={`map-fs-chip-${s}`}
-                  >
-                    <View
+              <TouchableOpacity
+                onPress={() => {
+                  setFilterStatus(null);
+                  setSelectedPinId(null);
+                }}
+                style={[styles.statusChip, !filterStatus && styles.statusChipActive]}
+                activeOpacity={0.85}
+                testID="map-fs-chip-all"
+              >
+                <Text style={[styles.statusChipText, !filterStatus && { color: "#fff" }]}>
+                  Wszystkie ({(data?.pins || []).length})
+                </Text>
+              </TouchableOpacity>
+              {(["nowy", "umowione", "decyzja", "podpisana", "nie_zainteresowany"] as const).map(
+                (s) => {
+                  const count = (data?.pins || []).filter((p: any) => p.status === s).length;
+                  const active = filterStatus === s;
+                  const sc = statusColor[s] || colors.textSecondary;
+                  return (
+                    <TouchableOpacity
+                      key={s}
+                      onPress={() => {
+                        setFilterStatus(active ? null : s);
+                        setSelectedPinId(null);
+                      }}
                       style={[
-                        styles.statusChipDot,
-                        { backgroundColor: active ? "#fff" : sc },
+                        styles.statusChip,
+                        active && { backgroundColor: sc, borderColor: sc },
                       ]}
-                    />
-                    <Text
-                      style={[styles.statusChipText, active && { color: "#fff" }]}
+                      activeOpacity={0.85}
+                      testID={`map-fs-chip-${s}`}
                     >
-                      {statusLabel[s]} ({count})
-                    </Text>
-                  </TouchableOpacity>
-                );
-              }
-            )}
-          </ScrollView>
+                      <View
+                        style={[
+                          styles.statusChipDot,
+                          { backgroundColor: active ? "#fff" : sc },
+                        ]}
+                      />
+                      <Text
+                        style={[styles.statusChipText, active && { color: "#fff" }]}
+                      >
+                        {statusLabel[s]} ({count})
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                }
+              )}
+            </ScrollView>
+          </View>
         )}
 
-        {/* Body */}
+        {/* Body — single map block that fills ALL remaining vertical space.
+            Sprint 5-pre-bis-tris fix: dropped the outer ScrollView wrapper
+            (was forcing the map into ~40% of the viewport on web/iOS); the
+            map's own internal ScrollView already handles list overflow. */}
         {loading ? (
           <View style={styles.centered}>
             <ActivityIndicator color={colors.primary} />
@@ -259,10 +275,7 @@ export default function MapFullscreen() {
             </TouchableOpacity>
           </View>
         ) : (
-          <ScrollView
-            style={{ flex: 1 }}
-            contentContainerStyle={{ paddingBottom: spacing.lg }}
-          >
+          <View style={styles.mapContainer}>
             <LeadMap
               pins={filteredPins || []}
               reps={mergedReps || []}
@@ -282,7 +295,7 @@ export default function MapFullscreen() {
               height={mapHeight}
               testID="map-fullscreen-leadmap"
             />
-          </ScrollView>
+          </View>
         )}
       </SafeAreaView>
     </>
@@ -340,15 +353,34 @@ const styles = StyleSheet.create({
   retryText: { color: "#fff", fontWeight: "800" },
   statusFilterRow: {
     paddingHorizontal: spacing.md,
-    paddingVertical: 8,
     gap: 6,
+    alignItems: "center", // chips vertically centered inside the 56px strip
+  },
+  // Sprint 5-pre-bis-tris fix: fixed-height host so the horizontal
+  // ScrollView doesn't inherit `flex: 1` and balloon to half the viewport.
+  statusFilterWrapper: {
+    height: 56,
+    flexShrink: 0,
+    backgroundColor: colors.paper,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    justifyContent: "center",
+  },
+  // Sprint 5-pre-bis-tris fix: takes ALL remaining vertical space after
+  // the header (56) and the chips strip (56). LeadMap reads `height` prop
+  // for its minHeight; we feed it `mapHeight` derived from
+  // window.height - 112 - safe-area insets.
+  mapContainer: {
+    flex: 1,
+    backgroundColor: colors.bg,
   },
   statusChip: {
     flexDirection: "row",
     alignItems: "center",
+    height: 36, // fixed pill height — RN flex doesn't auto-shrink without this
     gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 0, // height handles vertical sizing
     borderRadius: 999,
     borderWidth: 1,
     borderColor: colors.border,
