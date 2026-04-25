@@ -3365,3 +3365,112 @@ class TestRepsLiveContact:
         assert isinstance(first.get("email"), str) and "@" in first["email"]
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Sprint 5a — push notifications groundwork
+# ═══════════════════════════════════════════════════════════════════════════
+class TestDeviceRegistration:
+    """Sprint 5a — token registration. Triggers (sending pushes) come in 5b."""
+
+    def _cleanup(self):
+        import pymongo
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        try:
+            mc["oze_crm"]["device_tokens"].delete_many(
+                {"token": {"$regex": "^ExponentPushToken\\[(test|duplicate|del)"}}
+            )
+        finally:
+            mc.close()
+
+    def test_register_device_happy_path(self, api_client, manager_token):
+        self._cleanup()
+        r = api_client.post(
+            f"{BASE_URL}/api/devices/register",
+            headers={"Authorization": f"Bearer {manager_token}"},
+            json={
+                "token": "ExponentPushToken[test-happy-001]",
+                "platform": "android",
+                "app_version": "1.0.0",
+                "device_info": {"model": "Pixel 7", "os_version": "14"},
+            },
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["status"] == "ok"
+        assert body["registered"] is True
+        self._cleanup()
+
+    def test_register_idempotent_no_duplicate(self, api_client, manager_token):
+        """Same (user_id, token) registered twice → still 200, exactly 1 doc."""
+        self._cleanup()
+        for _ in range(3):
+            r = api_client.post(
+                f"{BASE_URL}/api/devices/register",
+                headers={"Authorization": f"Bearer {manager_token}"},
+                json={
+                    "token": "ExponentPushToken[duplicate-001]",
+                    "platform": "ios",
+                },
+            )
+            assert r.status_code == 200, r.text
+
+        import pymongo
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        try:
+            count = mc["oze_crm"]["device_tokens"].count_documents(
+                {"token": "ExponentPushToken[duplicate-001]"}
+            )
+            assert count == 1, f"expected 1 device doc, got {count}"
+        finally:
+            mc.close()
+        self._cleanup()
+
+    def test_register_requires_auth(self, api_client):
+        r = api_client.post(
+            f"{BASE_URL}/api/devices/register",
+            json={
+                "token": "ExponentPushToken[test-anon-001]",
+                "platform": "android",
+            },
+        )
+        assert r.status_code in (401, 403), r.text
+
+    def test_register_validates_platform(self, api_client, manager_token):
+        """Unknown platform value must be rejected by Pydantic regex."""
+        r = api_client.post(
+            f"{BASE_URL}/api/devices/register",
+            headers={"Authorization": f"Bearer {manager_token}"},
+            json={
+                "token": "ExponentPushToken[test-platform-001]",
+                "platform": "windows-phone",
+            },
+        )
+        assert r.status_code == 422, r.text
+
+    def test_unregister_device(self, api_client, manager_token):
+        """DELETE /devices/register?token=… removes only the caller's token."""
+        self._cleanup()
+        # Register first
+        token = "ExponentPushToken[del-001]"
+        r1 = api_client.post(
+            f"{BASE_URL}/api/devices/register",
+            headers={"Authorization": f"Bearer {manager_token}"},
+            json={"token": token, "platform": "android"},
+        )
+        assert r1.status_code == 200, r1.text
+        # Unregister
+        r2 = api_client.delete(
+            f"{BASE_URL}/api/devices/register?token={token}",
+            headers={"Authorization": f"Bearer {manager_token}"},
+        )
+        assert r2.status_code == 200, r2.text
+        assert r2.json()["deleted"] == 1
+        # Second unregister returns deleted=0 (idempotent)
+        r3 = api_client.delete(
+            f"{BASE_URL}/api/devices/register?token={token}",
+            headers={"Authorization": f"Bearer {manager_token}"},
+        )
+        assert r3.status_code == 200, r3.text
+        assert r3.json()["deleted"] == 0
+        self._cleanup()
+
+

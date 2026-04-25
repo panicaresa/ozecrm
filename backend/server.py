@@ -344,6 +344,14 @@ class RepLocationBatchIn(BaseModel):
     points: List[RepLocationBatchPoint]
 
 
+# --- Sprint 5a — push notifications groundwork (device token registration) ---
+class DeviceRegisterIn(BaseModel):
+    token: str = Field(..., min_length=10, max_length=200)
+    platform: str = Field(..., pattern="^(ios|android|web)$")
+    app_version: Optional[str] = None
+    device_info: Optional[Dict[str, Any]] = None  # model, os version, etc.
+
+
 # --- Contracts (Faza 1.7) ---
 FINANCING_TYPES = ("credit", "cash")
 WITHDRAWAL_DAYS = 14
@@ -1074,6 +1082,63 @@ async def push_rep_location_batch(
         "appended": appended_count,
         "received": len(body.points),
     }
+
+
+# ─── Sprint 5a — push notifications groundwork ─────────────────────────────────
+# Triggers (sending pushes) will land in Sprint 5b based on real-world usage
+# patterns. For now we only persist tokens so the trigger code has somewhere
+# to read from.
+
+@api.post("/devices/register")
+@limiter.limit("10/minute", key_func=_user_or_ip_key)
+async def register_device(
+    request: Request,
+    body: DeviceRegisterIn,
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Register an Expo Push token for the current user.
+
+    Same (user_id, token) pair is idempotent — repeated calls bump
+    `updated_at`/`last_seen_at` but never duplicate. Multiple devices per
+    user are explicitly allowed (a manager working on phone + tablet, etc.)."""
+    update_fields = {
+        "user_id": user["id"],
+        "user_role": user["role"],
+        "token": body.token,
+        "platform": body.platform,
+        "app_version": body.app_version,
+        "device_info": body.device_info or {},
+        "updated_at": now(),
+        "last_seen_at": now(),
+    }
+    insert_only = {
+        "id": str(uuid.uuid4()),
+        "created_at": now(),
+    }
+    await db.device_tokens.update_one(
+        {"user_id": user["id"], "token": body.token},
+        {"$set": update_fields, "$setOnInsert": insert_only},
+        upsert=True,
+    )
+    logger.info(
+        f"Device registered: user={user['id']} platform={body.platform} "
+        f"app_ver={body.app_version}"
+    )
+    return {"status": "ok", "registered": True}
+
+
+@api.delete("/devices/register")
+async def unregister_device(
+    request: Request,
+    token: str,
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Unregister a token (called on logout). Only the owning user can
+    delete their own tokens — token alone is not enough credential."""
+    result = await db.device_tokens.delete_one(
+        {"user_id": user["id"], "token": token}
+    )
+    return {"status": "ok", "deleted": result.deleted_count}
 
 
 @api.get("/rep/work-status")
@@ -2889,6 +2954,12 @@ async def ensure_indexes_and_migrations():
     # Replaced by compound (created_by, idempotency_key) created earlier in this fn.
     await db.contract_audit_log.create_index("contract_id")
     await db.contract_audit_log.create_index("changed_at")
+    # Sprint 5a — push notifications groundwork. Tokens dedupe by
+    # (user_id, token); `token` alone is also unique because Expo push
+    # tokens are globally unique to one device + app install.
+    await db.device_tokens.create_index("user_id")
+    await db.device_tokens.create_index("token", unique=True)
+    await db.device_tokens.create_index([("user_id", 1), ("token", 1)])
     # Sprint 1.5 / Batch 2 ISSUE-004 — idempotency scope migration.
     # Drop legacy GLOBAL unique index (idempotency_key_1) on both collections,
     # then create the compound (created_by, idempotency_key) unique index
@@ -3024,6 +3095,12 @@ async def seed_data():
     # Replaced by compound (created_by, idempotency_key) created earlier in this fn.
     await db.contract_audit_log.create_index("contract_id")
     await db.contract_audit_log.create_index("changed_at")
+    # Sprint 5a — push notifications groundwork. Tokens dedupe by
+    # (user_id, token); `token` alone is also unique because Expo push
+    # tokens are globally unique to one device + app install.
+    await db.device_tokens.create_index("user_id")
+    await db.device_tokens.create_index("token", unique=True)
+    await db.device_tokens.create_index([("user_id", 1), ("token", 1)])
 
     existing_settings = await db.settings.find_one({"id": "global"})
     if not existing_settings:

@@ -17,6 +17,7 @@
         "NSLocationWhenInUseUsageDescription": "Geotag leadów w terenie",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "Śledzenie trasy handlowca w terenie (także w tle)",
         "NSLocationAlwaysUsageDescription": "Śledzenie trasy handlowca w terenie w tle",
+        "NSUserNotificationsUsageDescription": "Powiadomienia o nowych spotkaniach i aktywności zespołu",
         "UIBackgroundModes": [
           "location",
           "fetch"
@@ -27,7 +28,7 @@
       "package": "pl.grupaoze.crm",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#FF4D00"
+        "backgroundColor": "#0F172A"
       },
       "edgeToEdgeEnabled": true,
       "permissions": [
@@ -38,7 +39,8 @@
         "ACCESS_COARSE_LOCATION",
         "ACCESS_BACKGROUND_LOCATION",
         "FOREGROUND_SERVICE",
-        "FOREGROUND_SERVICE_LOCATION"
+        "FOREGROUND_SERVICE_LOCATION",
+        "POST_NOTIFICATIONS"
       ]
     },
     "web": {
@@ -54,7 +56,7 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#09090B"
+          "backgroundColor": "#0F172A"
         }
       ],
       [
@@ -72,6 +74,13 @@
           "isIosBackgroundLocationEnabled": true,
           "isAndroidBackgroundLocationEnabled": true,
           "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#0F172A"
         }
       ],
       "@react-native-community/datetimepicker"

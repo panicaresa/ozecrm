@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { api, saveToken, clearToken, getToken } from "./api";
+import { registerForPushNotifications } from "./pushRegistration";
 
 export type Role = "admin" | "manager" | "handlowiec";
 export interface User {
@@ -48,6 +49,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Sprint 5a — push notifications groundwork. Once we have an authenticated
+  // user, attempt to register an Expo Push token. Best-effort, never throws —
+  // simulators/web/permission-denied are all silent. Triggers come in 5b.
+  useEffect(() => {
+    if (!user?.id) return;
+    registerForPushNotifications().catch(() => {});
+  }, [user?.id]);
 
   const login = useCallback(async (email: string, password: string) => {
     const res = await api.post("/auth/login", { email, password });

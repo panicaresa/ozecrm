@@ -639,11 +639,144 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Sprint 5-pre-pent — Phone+ZIP input masking + numeric keyboard + validation"
+    - "Sprint 5a — APK MVP build + push notifications groundwork"
   stuck_tasks:
-    - "Faza 2.0 GET /api/tracking/track/{rep_id} role-scoped"
+    - "EAS build BLOCKED — requires user `eas login` (Expo account). All other tasks complete."
   test_all: false
   test_priority: "high_first"
+
+# --- Sprint 5a (2026-04-25 14:50) — APK MVP + push groundwork ---
+sprint_5a:
+  - task: "App config: splash bg + adaptive bg + permissions + expo-notifications plugin"
+    implemented: true
+    working: true
+    file: "/app/frontend/app.json"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          • expo.plugins.expo-splash-screen.backgroundColor: #09090B → #0F172A
+          • expo.android.adaptiveIcon.backgroundColor: #FF4D00 → #0F172A
+          • expo.android.permissions: +POST_NOTIFICATIONS (Android 13+ runtime ask)
+          • expo.ios.infoPlist: +NSUserNotificationsUsageDescription
+          • expo.plugins: +expo-notifications with icon + #0F172A color
+          All assets verified 1024×1024 RGBA before edits.
+
+  - task: "Backend: device_tokens collection + indexes + register/unregister endpoints"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py + tests"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          New `device_tokens` collection with 3 indexes (user_id, token unique,
+          compound user_id+token). Indexes added in BOTH ensure_indexes and
+          seed_data for parity. New DeviceRegisterIn model + 2 endpoints:
+          POST /api/devices/register (idempotent upsert by user_id+token,
+          rate-limited 10/min) and DELETE /api/devices/register?token=… (logout).
+          5 new tests in TestDeviceRegistration: happy path, idempotent (same
+          token 3× → 1 doc), auth required, platform validation (regex),
+          unregister + idempotent delete.
+
+  - task: "Frontend: pushRegistration.ts + AuthProvider integration"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/lib/pushRegistration.ts (new) + /app/frontend/src/lib/auth.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Installed expo-notifications@55.0.20 + expo-device@55.0.15.
+          New pushRegistration.ts (~170 lines) with:
+            • setNotificationHandler at module load (foreground display)
+            • registerForPushNotifications() — checks Device.isDevice, skips
+              web, runtime POST_NOTIFICATIONS ask, Android channel setup,
+              acquires Expo Push token via projectId from app.json
+              (extra.eas.projectId — set by `eas init`), POSTs to backend
+              with platform/version/device_info. ALL ERRORS SWALLOWED.
+            • unregisterPushToken() for logout flow.
+          AuthProvider: useEffect on user.id change calls
+          registerForPushNotifications().catch(()=>{}). Best-effort,
+          never blocks UI.
+          IMPORTANT: token acquisition gracefully no-ops when projectId
+          is missing (current state — will be set by `eas init`). Backend
+          register endpoint is fully testable today.
+
+  - task: "Test data cleanup — TEST_ prefix"
+    implemented: true
+    working: true
+    file: "DELETE /api/admin/cleanup-test-data"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Ran cleanup endpoint: deleted 1 test user, 9 TEST_ leads,
+          1 test contract. After cleanup:
+            • 0 TEST_ leads
+            • 0 AUTO_ leads (test artifacts from earlier sprints)
+            • All 3 protected accounts (admin/manager/handlowiec@test.com)
+              still present
+            • DB: 281 users / 22 leads / 8 contracts
+
+  - task: "EAS Build APK preview"
+    implemented: false
+    working: "NA"
+    file: "(blocked on user input)"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          BLOCKED on user authentication. `eas whoami` → "Not logged in".
+          eas-cli@13.4.2 is installed; eas.json has development/preview/
+          production profiles ready; backend URL hardcoded to
+          https://renewable-sales-hub.preview.emergentagent.com in
+          development+preview profiles. Production profile has empty
+          backend URL (intentional — set via env at submit time).
+          
+          USER ACTION REQUIRED:
+          1. Run `eas login` (interactive) with Expo credentials, OR
+          2. Provide EXPO_TOKEN env var (programmatic access token from
+             https://expo.dev/accounts/[username]/settings/access-tokens)
+          3. Run `eas init` to mint a projectId (writes to
+             app.json → expo.extra.eas.projectId)
+          4. Run `eas build --platform android --profile preview
+             --non-interactive`
+          
+          Build itself takes ~10-15 min in EAS cloud and produces a signed
+          .apk URL ready for WhatsApp distribution to the field reps.
+
+  - task: "Tests + TS check (Sprint 5a)"
+    implemented: true
+    working: true
+    file: "(verify only)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Backend pytest: **103 passed / 2 skipped / 0 failed** (target was 101).
+          Frontend yarn tsc --noEmit: 0 errors.
+          Backend logs in production show 5 device registrations from the
+          test run + 1 deletion + 1 401 (auth gate test) + 1 422 (platform
+          validation test) — all expected.
 
 # --- Sprint 5-pre-pent (2026-04-25 13:45) — Input masking ---
 sprint_5_pre_pent:
