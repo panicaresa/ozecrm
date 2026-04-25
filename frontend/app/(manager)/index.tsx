@@ -54,6 +54,9 @@ export default function ManagerDashboard() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedPinId, setSelectedPinId] = useState<string | null>(null);
   const [selectedRepId, setSelectedRepId] = useState<string | null>(null);
+  // Sprint 5-pre-bis (ISSUE-UX-004): show first 5 reps in "Cele i postęp"
+  // by default; user taps "Pokaż wszystkich (N)" to inline-expand.
+  const [progressExpanded, setProgressExpanded] = useState(false);
   // Sprint 4 — poll rep activity every 60s; data is keyed by rep_id.
   const { data: activityData } = useRepActivity(true, 60_000);
   const activityByRepId = React.useMemo(() => {
@@ -260,114 +263,31 @@ export default function ManagerDashboard() {
           <KpiTile label="Aktywni w terenie" value={data?.kpi.active_reps ?? 0} icon="users" accent={colors.info} testID="kpi-active-reps" />
         </View>
 
-        {/* Szybki kalkulator prowizji */}
-        <View style={{ marginHorizontal: spacing.md, marginTop: spacing.md }}>
-          <CommissionCalculator testID="manager-commission-calculator" />
-        </View>
-
-        {/* Sprint 3.5 — Daily Report (collapsed by default) */}
-        <View style={{ marginHorizontal: spacing.md, marginTop: spacing.md }}>
-          <DailyReportWidget testID="manager-daily-report" />
-        </View>
-
-        {/* Faza 2.1 — Search bar + rep filter chips */}
-        <View style={{ marginHorizontal: spacing.md, marginTop: 12 }}>
-          <View style={styles.searchBox}>
-            <Feather name="search" size={18} color={colors.textSecondary} />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Szukaj: klient, telefon, adres..."
-              placeholderTextColor={colors.textSecondary}
-              value={searchTerm}
-              onChangeText={setSearchTerm}
-              testID="manager-search-input"
-              returnKeyType="search"
-            />
-            {searchTerm.length > 0 && (
-              <TouchableOpacity onPress={() => setSearchTerm("")} hitSlop={8}>
-                <Feather name="x-circle" size={16} color={colors.textSecondary} />
-              </TouchableOpacity>
-            )}
-          </View>
-          {(data?.rep_progress?.length || 0) > 0 && (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingVertical: 8 }}>
-              <TouchableOpacity
-                style={[styles.filterChip, !filterRepId && styles.filterChipActive]}
-                onPress={() => setFilterRepId(null)}
-                testID="filter-rep-all"
-              >
-                <Feather name="users" size={12} color={!filterRepId ? "#fff" : colors.textPrimary} />
-                <Text style={[styles.filterChipText, !filterRepId && { color: "#fff" }]}>Wszyscy</Text>
-              </TouchableOpacity>
-              {(data?.rep_progress || []).map((r: any) => (
-                <TouchableOpacity
-                  key={r.user_id}
-                  style={[styles.filterChip, filterRepId === r.user_id && styles.filterChipActive]}
-                  onPress={() => setFilterRepId(filterRepId === r.user_id ? null : r.user_id)}
-                  testID={`filter-rep-${r.user_id}`}
-                >
-                  <Text style={[styles.filterChipText, filterRepId === r.user_id && { color: "#fff" }]}>
-                    {(r.name || "").split(" ")[0]}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          )}
-        </View>
-
-
-        <View style={styles.sectionCard}>
-          <View style={styles.sectionHead}>
-            <Text style={styles.sectionTitle}>Cele i postęp</Text>
-            <Text style={styles.sectionSub}>Miesiąc</Text>
-          </View>
-          {(data?.rep_progress || []).map((r: any) => (
-            <TouchableOpacity
-              key={r.user_id}
-              onPress={() => router.push(`/(manager)/rep/${r.user_id}` as any)}
-              activeOpacity={0.7}
-              testID={`rep-row-${r.user_id}`}
-            >
-              <ProgressRow rep={r} testID={`rep-progress-${r.user_id}`} />
-            </TouchableOpacity>
-          ))}
-          {(data?.rep_progress?.length || 0) === 0 && (
-            <Text style={styles.empty}>Brak przypisanych handlowców</Text>
-          )}
-        </View>
-
-        <View style={styles.sectionCard}>
-          <View style={styles.sectionHead}>
-            <Text style={styles.sectionTitle}>Statusy leadów</Text>
-            <Text style={styles.sectionSub}>{data?.total_leads ?? 0} ogółem</Text>
-          </View>
-          <StatusDonut
-            data={data?.status_breakdown || {}}
-            selected={filterStatus}
-            onSelect={(k) => {
-              setFilterStatus(k);
-              setSelectedPinId(null);
-            }}
-            testID="status-donut"
-          />
-        </View>
-
-        <View style={styles.sectionCard}>
-          <View style={styles.sectionHead}>
-            <Text style={styles.sectionTitle}>Top 3 Handlowców</Text>
-            <Feather name="award" size={16} color={colors.accent} />
-          </View>
-          {(data?.top3 || []).map((r: any, i: number) => (
-            <ProgressRow rep={r} rank={i + 1} key={r.user_id} testID={`top3-${i}`} />
-          ))}
-        </View>
-
+        {/* Sprint 5-pre-bis (ISSUE-UX-005) — Lead Map promoted to TOP of the
+            dashboard (most operationally important). Maximize button opens
+            the dedicated /map-fullscreen route. */}
         <View style={[styles.sectionCard, { padding: 0, overflow: "hidden" }]}>
           <View style={[styles.sectionHead, { padding: spacing.md, paddingBottom: 8 }]}>
             <Text style={styles.sectionTitle}>Lead Map · Live</Text>
-            <Text style={styles.sectionSub}>
-              {(data?.pins || []).length} leadów · {(data?.reps_live || []).length} handlowców
-            </Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <Text style={styles.sectionSub}>
+                {(data?.pins || []).length} · {(data?.reps_live || []).length}
+              </Text>
+              <TouchableOpacity
+                onPress={() =>
+                  router.push({
+                    pathname: "/map-fullscreen",
+                    params: filterStatus ? { filter_status: filterStatus } : undefined,
+                  } as any)
+                }
+                style={styles.expandIconBtn}
+                testID="map-expand"
+                accessibilityLabel="Pełny ekran mapy"
+                hitSlop={6}
+              >
+                <Feather name="maximize-2" size={16} color={colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
           </View>
 
           {/* Sprint 4 — status filter chips (filters map + drilldown via filterStatus) */}
@@ -518,7 +438,7 @@ export default function ManagerDashboard() {
           );
         })()}
 
-        {/* Drill-down list */}
+        {/* Drill-down list (driven by selectedPinId / filterStatus) */}
         {drilldownLeads.length > 0 && (
           <View style={styles.sectionCard} testID="drilldown-list">
             <View style={styles.sectionHead}>
@@ -555,6 +475,152 @@ export default function ManagerDashboard() {
           </View>
         )}
 
+        {/* Sprint 3.5 — Daily Report (collapsed by default) */}
+        <View style={{ marginHorizontal: spacing.md, marginTop: spacing.md }}>
+          <DailyReportWidget testID="manager-daily-report" />
+        </View>
+
+        {/* Faza 2.1 — Search bar + rep filter chips */}
+        <View style={{ marginHorizontal: spacing.md, marginTop: 12 }}>
+          <View style={styles.searchBox}>
+            <Feather name="search" size={18} color={colors.textSecondary} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Szukaj: klient, telefon, adres..."
+              placeholderTextColor={colors.textSecondary}
+              value={searchTerm}
+              onChangeText={setSearchTerm}
+              testID="manager-search-input"
+              returnKeyType="search"
+            />
+            {searchTerm.length > 0 && (
+              <TouchableOpacity onPress={() => setSearchTerm("")} hitSlop={8}>
+                <Feather name="x-circle" size={16} color={colors.textSecondary} />
+              </TouchableOpacity>
+            )}
+          </View>
+          {(data?.rep_progress?.length || 0) > 0 && (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingVertical: 8 }}>
+              <TouchableOpacity
+                style={[styles.filterChip, !filterRepId && styles.filterChipActive]}
+                onPress={() => setFilterRepId(null)}
+                testID="filter-rep-all"
+              >
+                <Feather name="users" size={12} color={!filterRepId ? "#fff" : colors.textPrimary} />
+                <Text style={[styles.filterChipText, !filterRepId && { color: "#fff" }]}>Wszyscy</Text>
+              </TouchableOpacity>
+              {(data?.rep_progress || []).map((r: any) => (
+                <TouchableOpacity
+                  key={r.user_id}
+                  style={[styles.filterChip, filterRepId === r.user_id && styles.filterChipActive]}
+                  onPress={() => setFilterRepId(filterRepId === r.user_id ? null : r.user_id)}
+                  testID={`filter-rep-${r.user_id}`}
+                >
+                  <Text style={[styles.filterChipText, filterRepId === r.user_id && { color: "#fff" }]}>
+                    {(r.name || "").split(" ")[0]}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          )}
+        </View>
+
+
+        <View style={styles.sectionCard}>
+          <View style={styles.sectionHead}>
+            <Text style={styles.sectionTitle}>Cele i postęp</Text>
+            <Text style={styles.sectionSub}>Miesiąc</Text>
+          </View>
+          {/* Sprint 5-pre-bis (ISSUE-UX-004): show max 5 reps inline; user
+              can tap "Pokaż wszystkich (N więcej)" to expand the rest in
+              place. Sort by signed DESC then by percent DESC so top
+              performers always land in the visible 5. */}
+          {(() => {
+            const allReps = (data?.rep_progress || []) as any[];
+            const sortedReps = [...allReps].sort(
+              (a, b) =>
+                (b.signed || 0) - (a.signed || 0) ||
+                (b.percent || 0) - (a.percent || 0)
+            );
+            const visibleReps = progressExpanded
+              ? sortedReps
+              : sortedReps.slice(0, 5);
+            const overflow = sortedReps.length - 5;
+            return (
+              <>
+                {visibleReps.map((r: any) => (
+                  <TouchableOpacity
+                    key={r.user_id}
+                    onPress={() => router.push(`/(manager)/rep/${r.user_id}` as any)}
+                    activeOpacity={0.7}
+                    testID={`rep-row-${r.user_id}`}
+                  >
+                    <ProgressRow rep={r} testID={`rep-progress-${r.user_id}`} />
+                  </TouchableOpacity>
+                ))}
+                {sortedReps.length > 5 && !progressExpanded && (
+                  <TouchableOpacity
+                    onPress={() => setProgressExpanded(true)}
+                    style={styles.expandRow}
+                    testID="cele-expand"
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.expandText}>
+                      Pokaż wszystkich ({overflow} więcej)
+                    </Text>
+                    <Feather name="chevron-down" size={18} color={colors.primary} />
+                  </TouchableOpacity>
+                )}
+                {sortedReps.length > 5 && progressExpanded && (
+                  <TouchableOpacity
+                    onPress={() => setProgressExpanded(false)}
+                    style={styles.expandRow}
+                    testID="cele-collapse"
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.expandText}>Zwiń</Text>
+                    <Feather name="chevron-up" size={18} color={colors.primary} />
+                  </TouchableOpacity>
+                )}
+                {sortedReps.length === 0 && (
+                  <Text style={styles.empty}>Brak przypisanych handlowców</Text>
+                )}
+              </>
+            );
+          })()}
+        </View>
+
+        <View style={styles.sectionCard}>
+          <View style={styles.sectionHead}>
+            <Text style={styles.sectionTitle}>Statusy leadów</Text>
+            <Text style={styles.sectionSub}>{data?.total_leads ?? 0} ogółem</Text>
+          </View>
+          <StatusDonut
+            data={data?.status_breakdown || {}}
+            selected={filterStatus}
+            onSelect={(k) => {
+              setFilterStatus(k);
+              setSelectedPinId(null);
+            }}
+            testID="status-donut"
+          />
+        </View>
+
+        <View style={styles.sectionCard}>
+          <View style={styles.sectionHead}>
+            <Text style={styles.sectionTitle}>Top 3 Handlowców</Text>
+            <Feather name="award" size={16} color={colors.accent} />
+          </View>
+          {(data?.top3 || []).map((r: any, i: number) => (
+            <ProgressRow rep={r} rank={i + 1} key={r.user_id} testID={`top3-${i}`} />
+          ))}
+        </View>
+
+        {/* Sprint 5-pre-bis (ISSUE-UX-005) — LeadMap + rep callout + drill-down
+            were moved up to be right under the KPI grid (operationally the
+            most important block). They're rendered there now; this slot
+            is intentionally empty. */}
+
         <TouchableOpacity
           style={[styles.viewAllBtn, { backgroundColor: colors.primary }]}
           onPress={() => router.push("/(manager)/calendar")}
@@ -587,6 +653,13 @@ export default function ManagerDashboard() {
           <Text style={styles.viewAllText}>Wszystkie leady zespołu</Text>
           <Feather name="chevron-right" size={16} color={colors.textInverse} />
         </TouchableOpacity>
+
+        {/* Sprint 5-pre-bis (ISSUE-UX-005) — Commission calculator at the
+            very bottom of the dashboard. Collapsed by default (see
+            CommissionCalculator.tsx). */}
+        <View style={{ marginHorizontal: spacing.md, marginTop: spacing.md }}>
+          <CommissionCalculator testID="manager-commission-calculator" />
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -636,6 +709,34 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingHorizontal: spacing.md,
     paddingBottom: spacing.sm,
+  },
+  // Sprint 5-pre-bis (ISSUE-UX-002) — small icon button next to map title
+  expandIconBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: colors.bg,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  // Sprint 5-pre-bis (ISSUE-UX-004) — "Pokaż wszystkich (N)" / "Zwiń" row
+  expandRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 12,
+    marginTop: 4,
+    borderTopWidth: 1,
+    borderTopColor: colors.zinc100,
+  },
+  expandText: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: colors.primary,
+    letterSpacing: 0.2,
   },
   statusChip: {
     flexDirection: "row",

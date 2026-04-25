@@ -46,7 +46,8 @@ export default function AdminHome() {
       </View>
 
       <ScrollView contentContainerStyle={{ padding: spacing.md, gap: 12 }}>
-        <CommissionCalculator testID="admin-commission-calculator" />
+        {/* Sprint 5-pre-bis (ISSUE-UX-005) — Daily Report at top, action tiles
+            in the middle, calculator at the bottom (collapsed by default). */}
         <DailyReportWidget testID="admin-daily-report" />
         {tiles.map((t) => (
           <TouchableOpacity
@@ -66,6 +67,7 @@ export default function AdminHome() {
             <Feather name="chevron-right" size={20} color={colors.textSecondary} />
           </TouchableOpacity>
         ))}
+        <CommissionCalculator testID="admin-commission-calculator" />
       </ScrollView>
     </SafeAreaView>
   );

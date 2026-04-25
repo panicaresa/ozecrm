@@ -119,7 +119,10 @@ function computeAll(
 }
 
 export function CommissionCalculator({ testID, compact = false }: Props) {
-  const [expanded, setExpanded] = useState(true);
+  // Sprint 5-pre-bis (ISSUE-UX-003): default to COLLAPSED so the calculator
+  // stops occupying scarce top real-estate on every dashboard. User taps
+  // the header to expand. Toggle handler at line 200-224 already wired.
+  const [expanded, setExpanded] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);

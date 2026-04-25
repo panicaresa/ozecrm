@@ -639,11 +639,141 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Sprint 5-pre — Batch GPS endpoint + offline queue stale syncing reset + 8 date-flake test fixes"
+    - "Sprint 5-pre-bis — UX cluster: auto-status, full-screen map, calc collapsed, progress max-5, dashboard reorder"
   stuck_tasks:
     - "Faza 2.0 GET /api/tracking/track/{rep_id} role-scoped"
   test_all: false
   test_priority: "high_first"
+
+# --- Sprint 5-pre-bis (2026-04-25) — UX polish before APK MVP ---
+sprint_5_pre_bis:
+  - task: "ISSUE-UX-001 — Auto lead.status='podpisana' on contract create"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py + tests"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Replaced the unconditional update with: read current lead.status,
+          if !=podpisana update + insert lead_audit_log entry + set
+          status_auto_changed_at and status_auto_changed_reason metadata.
+          Wrapped in try/except so contract creation never fails because
+          of audit/update issues. Idempotent replay returns early before
+          this branch (verified by test).
+          3 new tests in TestAutoStatusOnContract: passes status update,
+          no double-audit on second contract (already-podpisana skip),
+          no double-audit on idempotent replay.
+      - working: true
+        agent: "testing"
+        comment: |
+          Sprint 5-pre-bis ISSUE-UX-001 — VERIFIED end-to-end.
+          1) pytest tests/test_oze_crm_api.py: **97 passed, 2 skipped, 0 failed**
+             (all 3 TestAutoStatusOnContract tests green:
+              test_lead_status_changes_to_podpisana_on_contract_create,
+              test_lead_already_podpisana_no_extra_audit_entry,
+              test_idempotent_replay_does_not_double_audit).
+          2) Manual smoke (script: /app/backend_test_sprint5_pre_bis.py,
+             12/12 PASS) hitting the public BASE URL
+             https://renewable-sales-hub.preview.emergentagent.com/api:
+             a) login handlowiec@test.com → 200 ✅
+             b) POST /api/leads with status=umowione + photo_base64 + GPS
+                near 53.5/18.0 + meeting_at → 200 (status echoed "umowione") ✅
+             c) POST /api/contracts (cash, signed_at=yesterday, valid finance
+                fields) → 200, contract_id returned ✅
+                Backend log confirms: "Lead <id> status auto-changed:
+                umowione → podpisana".
+             d) Manager GET /api/leads → lead now has:
+                  status="podpisana" ✅
+                  status_auto_changed_reason="contract_created" ✅
+                  status_auto_changed_at="2026-04-25T11:05:11.905000" (non-null ISO) ✅
+             e) Second POST /api/contracts with NEW Idempotency-Key on the
+                SAME lead → 200 returns a DIFFERENT contract id, lead.status
+                STILL "podpisana", and status_auto_changed_at unchanged (no
+                second audit entry) ✅
+             f) Idempotent replay: POST /api/contracts twice with the SAME
+                Idempotency-Key → both 200, both return the SAME contract_id
+                (e0a7b170-…). No duplicate created. ✅
+          3) Regression sanity for Sprint 5-pre:
+                PUT /api/rep/location/batch with 3 distinct points →
+                  200 {"ok":true,"track_len":4,"appended":3,"received":3} ✅
+                DELETE /api/rep/location → 200 ✅
+          No unexpected behaviour. No 4xx/5xx outside the explicitly
+          negative tests. Backend logs clean.
+
+  - task: "ISSUE-UX-002 — Full-screen map view (/map-fullscreen)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/map-fullscreen.tsx (new) + manager dashboard maximize button + _layout.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          New route /map-fullscreen reuses LeadMap with mapHeight=screen-200
+          (large), refetches /dashboard/manager + /leads independently.
+          Status filter chips persist via params.filter_status query.
+          Hidden header (Stack.Screen options), animated slide_from_right.
+          Bounces handlowiec back to /(rep) (RBAC — server enforces too).
+          Manager dashboard adds maximize-2 icon button next to "Lead Map"
+          title (testID="map-expand"). Visual smoke: confirmed via screenshot.
+
+  - task: "ISSUE-UX-003 — CommissionCalculator collapsed by default"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/CommissionCalculator.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Single line change: useState(true) → useState(false). Existing
+          tap-header-to-toggle wiring is reused. Visual smoke confirmed
+          via screenshot — manager dashboard now shows just the calc
+          header at bottom with chevron-down.
+
+  - task: "ISSUE-UX-004 — Cele i postęp max 5 + expand"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(manager)/index.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          rep_progress now sorts by signed DESC then percent DESC, slices to
+          5 by default. "Pokaż wszystkich (N więcej)" / "Zwiń" toggle inline.
+          New testIDs: cele-expand, cele-collapse. Style additions: expandRow,
+          expandText. Visual smoke confirmed: 6 reps total → "Pokaż wszystkich (1 więcej)" shown.
+
+  - task: "ISSUE-UX-005 — Dashboard reorder (LeadMap top, Calc bottom)"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/(manager)/index.tsx + (admin)/index.tsx (rep already had calc at end)"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Manager: KPI → LeadMap (with maximize) → rep callout → drilldown
+          → DailyReport → Search → Cele i postęp → Donut → Top 3 → buttons
+          → CommissionCalculator (was: KPI → Calc → DailyReport → Search →
+          Cele → Donut → Top 3 → LeadMap → callout → drilldown → buttons).
+          Admin: DailyReport → tiles → Calc (was: Calc → DailyReport → tiles).
+          Rep: already had calc at end; just inherits collapsed default.
+          Visual smoke confirmed via 2 screenshots (top + bottom of dashboard).
+
 
 # --- Sprint 5-pre (2026-04-25) — Critical pre-APK MVP fixes ---
 sprint_5_pre:
@@ -2133,3 +2263,52 @@ sprint_5_pre_summary:
       green from the backend side. (Task 2 — offline queue
       resetStaleSyncing — is frontend-only and was explicitly excluded
       from this run per spec.)
+
+
+    -agent: "testing"
+    -message: |
+      Sprint 5-pre-bis ISSUE-UX-001 — backend verification COMPLETE.
+
+      pytest tests/test_oze_crm_api.py:
+        passed: 97
+        failed: 0
+        skipped: 2
+        TestAutoStatusOnContract: 3/3 PASS
+          - test_lead_status_changes_to_podpisana_on_contract_create ✅
+          - test_lead_already_podpisana_no_extra_audit_entry ✅
+          - test_idempotent_replay_does_not_double_audit ✅
+
+      Manual smoke (script /app/backend_test_sprint5_pre_bis.py, all 12/12 PASS):
+        a) login handlowiec@test.com → 200 ✅
+        b) POST /api/leads with status=umowione + photo_base64 + GPS near
+           53.5/18.0 (client_name=AUTO_TEST_<ts>) → 200 ✅
+        c) POST /api/contracts as handlowiec (cash, signed_at=yesterday,
+           gross 45000, panele 25000+5kW, magazyn 15000+5kWh,
+           building_type=mieszkalny, roof_area_m2=100, pesel_last4=1234,
+           short client_signature_b64) → 200 ✅
+        d) GET /api/leads as manager — lead has:
+              status="podpisana" ✅
+              status_auto_changed_reason="contract_created" ✅
+              status_auto_changed_at="2026-04-25T11:05:11.905000" (non-null) ✅
+        e) Second POST /api/contracts on same lead with NEW Idempotency-Key
+              → 200 with NEW contract_id ≠ first ✅
+              lead.status STILL "podpisana" ✅
+              status_auto_changed_at unchanged (no second audit) ✅
+        f) Idempotency replay: 2 POSTs with SAME Idempotency-Key → both 200
+              and SAME contract_id (e0a7b170-…); no duplicate created ✅
+
+      Regression sanity (Sprint 5-pre Task 3):
+        PUT /api/rep/location/batch with 3 distinct pts as handlowiec →
+          200 {"ok":true,"track_len":4,"appended":3,"received":3} ✅
+        DELETE /api/rep/location → 200 ✅
+        No regression observed.
+
+      Backend logs confirm correct behaviour:
+        "Lead 672c79bd-1e7e-4796-aa66-d89c36cac94e status auto-changed:
+         umowione → podpisana (contract 3bf4103e-…)"
+        Replay POST returned same id without firing a second status flip.
+
+      No unexpected behaviour. ISSUE-UX-001 is verified and stable.
+      Polski: Funkcja auto-zmiany statusu leada na "podpisana" po utworzeniu
+      kontraktu działa poprawnie — bez podwójnych wpisów w audycie i z
+      poprawnymi metadanymi (status_auto_changed_reason, status_auto_changed_at).

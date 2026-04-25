@@ -44,6 +44,11 @@ export default function RootLayout() {
             <Stack.Screen name="(manager)" />
             <Stack.Screen name="(rep)" />
             <Stack.Screen name="sync-status" />
+            {/* Sprint 5-pre-bis (ISSUE-UX-002) — full-screen map for manager/admin */}
+            <Stack.Screen
+              name="map-fullscreen"
+              options={{ headerShown: false, gestureEnabled: true, animation: "slide_from_right" }}
+            />
           </Stack>
         </AuthProvider>
       </SafeAreaProvider>

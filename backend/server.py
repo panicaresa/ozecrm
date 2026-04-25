@@ -2506,7 +2506,50 @@ async def create_contract(
             if existing:
                 return _serialize_contract(existing)
         raise HTTPException(status_code=500, detail=f"Insert failed: {e}")
-    await db.leads.update_one({"id": body.lead_id}, {"$set": {"status": "podpisana", "updated_at": now()}})
+    # Sprint 5-pre-bis (ISSUE-UX-001): Auto-update lead status to "podpisana"
+    # after successful contract creation. Eliminates the manual flip the
+    # handlowiec used to have to do after signing. Skip the update (and
+    # therefore skip the audit entry too) when the lead is ALREADY in
+    # "podpisana" — second contract on the same lead, etc. Wrapped in
+    # try/except: if the update or audit fails the contract itself stays
+    # saved (this is convenience, not a hard invariant).
+    try:
+        lead_status_before = lead.get("status")
+        if lead_status_before != "podpisana":
+            await db.leads.update_one(
+                {"id": body.lead_id},
+                {
+                    "$set": {
+                        "status": "podpisana",
+                        "updated_at": now(),
+                        "status_auto_changed_at": now(),
+                        "status_auto_changed_reason": "contract_created",
+                    }
+                },
+            )
+            await db.lead_audit_log.insert_one(
+                {
+                    "id": str(uuid.uuid4()),
+                    "lead_id": body.lead_id,
+                    "field": "status",
+                    "old_value": lead_status_before,
+                    "new_value": "podpisana",
+                    "reason": f"Auto-changed: contract {doc['id']} created",
+                    "changed_by": user["id"],
+                    "changed_by_role": user["role"],
+                    "changed_at": now(),
+                }
+            )
+            logger.info(
+                f"Lead {body.lead_id} status auto-changed: "
+                f"{lead_status_before} → podpisana (contract {doc['id']})"
+            )
+    except Exception as e:
+        # Non-fatal — contract is saved, status update is convenience.
+        # User can still flip status manually via PATCH /leads/{id}.
+        logger.warning(
+            f"Failed to auto-update lead status to podpisana: {e}"
+        )
     # Sprint Batch 3 (ISSUE-008): if a negative-margin override clamped the
     # commission to 0, write an explicit audit-log entry so admins can see
     # exactly how much "raw commission" was waived for transparency.

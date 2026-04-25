@@ -3129,3 +3129,202 @@ class TestRepLocationBatch:
         assert abs(float(my_doc.get("lat")) - 54.512) < 0.0001, my_doc
         self._stop(api_client, rep_token)
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Sprint 5-pre-bis ISSUE-UX-001 — Auto lead.status="podpisana" on contract create
+# ═══════════════════════════════════════════════════════════════════════════
+class TestAutoStatusOnContract:
+    """After POST /contracts succeeds, the backing lead's status flips to
+    'podpisana' automatically and an entry is written to lead_audit_log.
+    Eliminates the manual status-flip the handlowiec used to have to do."""
+
+    BASE_LAT = 52.5000
+    BASE_LNG = 19.0000
+
+    def _cleanup(self):
+        import pymongo
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        try:
+            mc["oze_crm"]["leads"].delete_many({"client_name": {"$regex": "^AUTO_"}})
+            mc["oze_crm"]["contracts"].delete_many({"client_name": {"$regex": "^AUTO_"}})
+            mc["oze_crm"]["lead_audit_log"].delete_many({"reason": {"$regex": "^Auto-changed"}})
+        finally:
+            mc.close()
+
+    def _photo(self):
+        return "iVBORw0KGgo" + "A" * 200
+
+    def _make_lead(self, api_client, rep_token, *, status="umowione", jitter=1):
+        import uuid
+        payload = {
+            "client_name": f"AUTO_{uuid.uuid4().hex[:6]}",
+            "latitude": self.BASE_LAT + jitter * 0.0003,
+            "longitude": self.BASE_LNG + jitter * 0.0003,
+            "status": status,
+            "meeting_at": "2026-04-25T11:00:00",
+            "photo_base64": self._photo(),
+        }
+        r = api_client.post(
+            f"{BASE_URL}/api/leads",
+            json=payload,
+            headers={"Authorization": f"Bearer {rep_token}"},
+        )
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    def _sign_contract(self, api_client, rep_token, lead_id):
+        body = {
+            "lead_id": lead_id,
+            "building_type": "mieszkalny",
+            "roof_area_m2": 100.0,
+            "panele_kw": 5.0,
+            "panele_price": 25000.0,
+            "magazyn_kwh": 5.0,
+            "magazyn_price": 15000.0,
+            "modernizacja_dachu": False,
+            "dach_price": 0.0,
+            "gross_amount": 45000.0,
+            "klient_pesel_last4": "1234",
+            "signed_at": yesterday_iso(),
+            "financing_type": "cash",
+            "client_signature_b64": "iVBORw0KGgo" + "A" * 100,
+            "ev_charger": False,
+        }
+        r = api_client.post(
+            f"{BASE_URL}/api/contracts",
+            json=body,
+            headers={"Authorization": f"Bearer {rep_token}"},
+        )
+        return r
+
+    # 1) Lead status="umowione" → POST /contracts → lead.status="podpisana"
+    def test_lead_status_changes_to_podpisana_on_contract_create(
+        self, api_client, rep_token, manager_token
+    ):
+        self._cleanup()
+        lead = self._make_lead(api_client, rep_token, status="umowione", jitter=2)
+        lead_id = lead["id"]
+        # Sanity: lead is NOT yet podpisana
+        assert lead.get("status") == "umowione"
+
+        r = self._sign_contract(api_client, rep_token, lead_id)
+        assert r.status_code == 200, r.text
+
+        # Verify lead.status is now "podpisana" — fetched via manager (rep
+        # may not have a single-lead GET for foreign assignee, manager always does).
+        leads_resp = api_client.get(
+            f"{BASE_URL}/api/leads",
+            headers={"Authorization": f"Bearer {manager_token}"},
+        )
+        assert leads_resp.status_code == 200, leads_resp.text
+        match = next((x for x in leads_resp.json() if x.get("id") == lead_id), None)
+        assert match is not None, f"lead {lead_id} disappeared after contract"
+        assert match.get("status") == "podpisana", match
+        # Also assert the audit metadata was set
+        assert match.get("status_auto_changed_at") is not None
+        assert match.get("status_auto_changed_reason") == "contract_created"
+
+        # Verify audit log entry exists in DB
+        import pymongo
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        try:
+            audit = list(
+                mc["oze_crm"]["lead_audit_log"].find(
+                    {"lead_id": lead_id, "field": "status"}
+                )
+            )
+            assert len(audit) >= 1, f"no audit entry for {lead_id}"
+            entry = audit[0]
+            assert entry["new_value"] == "podpisana"
+            assert entry["old_value"] == "umowione"
+            assert "Auto-changed" in entry["reason"]
+            assert entry["changed_by_role"] == "handlowiec"
+        finally:
+            mc.close()
+        self._cleanup()
+
+    # 2) Lead already podpisana → POST /contracts (second one) → no audit entry
+    def test_lead_already_podpisana_no_extra_audit_entry(
+        self, api_client, rep_token
+    ):
+        self._cleanup()
+        # First contract: lead "umowione" → flipped to "podpisana" + 1 audit
+        lead = self._make_lead(api_client, rep_token, status="umowione", jitter=3)
+        lead_id = lead["id"]
+        r1 = self._sign_contract(api_client, rep_token, lead_id)
+        assert r1.status_code == 200, r1.text
+
+        # Second contract on the SAME lead — status is already "podpisana"
+        # so the auto-update branch should NOT run, audit count must stay at 1.
+        r2 = self._sign_contract(api_client, rep_token, lead_id)
+        assert r2.status_code == 200, r2.text
+
+        import pymongo
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        try:
+            audit_count = mc["oze_crm"]["lead_audit_log"].count_documents(
+                {"lead_id": lead_id, "field": "status"}
+            )
+            # Exactly 1 audit entry (from the first contract) — second one
+            # was a no-op because status was already "podpisana".
+            assert audit_count == 1, f"expected 1 audit entry, got {audit_count}"
+        finally:
+            mc.close()
+        self._cleanup()
+
+    # 3) Idempotent replay — 2nd POST with same idempotency_key returns
+    #    the same contract; audit log MUST NOT double-write either.
+    def test_idempotent_replay_does_not_double_audit(
+        self, api_client, rep_token
+    ):
+        self._cleanup()
+        import uuid
+        lead = self._make_lead(api_client, rep_token, status="decyzja", jitter=4)
+        lead_id = lead["id"]
+        idem = f"auto-status-test-{uuid.uuid4().hex[:8]}"
+
+        body = {
+            "lead_id": lead_id,
+            "building_type": "mieszkalny",
+            "roof_area_m2": 100.0,
+            "panele_kw": 5.0,
+            "panele_price": 25000.0,
+            "magazyn_kwh": 0.0,
+            "magazyn_price": 0.0,
+            "modernizacja_dachu": False,
+            "dach_price": 0.0,
+            "gross_amount": 40000.0,
+            "klient_pesel_last4": "5678",
+            "signed_at": yesterday_iso(),
+            "financing_type": "cash",
+            "client_signature_b64": "iVBORw0KGgo" + "B" * 100,
+            "ev_charger": False,
+        }
+        headers = {
+            "Authorization": f"Bearer {rep_token}",
+            "Idempotency-Key": idem,
+        }
+
+        r1 = api_client.post(f"{BASE_URL}/api/contracts", json=body, headers=headers)
+        assert r1.status_code == 200, r1.text
+        contract_id_1 = r1.json()["id"]
+
+        # Same key → same contract returned (200 OK, replay)
+        r2 = api_client.post(f"{BASE_URL}/api/contracts", json=body, headers=headers)
+        assert r2.status_code == 200, r2.text
+        assert r2.json()["id"] == contract_id_1
+
+        import pymongo
+        mc = pymongo.MongoClient("mongodb://localhost:27017")
+        try:
+            audit_count = mc["oze_crm"]["lead_audit_log"].count_documents(
+                {"lead_id": lead_id, "field": "status"}
+            )
+            # Exactly 1 audit entry — the idempotent replay did NOT call
+            # the status-update branch a second time.
+            assert audit_count == 1, f"expected 1 audit entry, got {audit_count}"
+        finally:
+            mc.close()
+        self._cleanup()
+
+
