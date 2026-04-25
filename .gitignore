@@ -30,8 +30,7 @@ next-env.d.ts
 dist/
 dist
 
-# Environment files (comprehensive coverage)
-
+# Tokens / explicit credential JSONs (NOT .env files — those are deploy artifacts)
 *token.json*
 *credentials.json*
 
@@ -76,87 +75,17 @@ agenthub/agents/youtube/db
 # Build caches
 .cache/
 
+# Local-only secrets — committed accounts referenced in /app/memory/test_credentials.md
+# are intentionally excluded so dev seeds aren't accidentally rotated by the
+# deployment pipeline. The .env files themselves MUST be committed for native
+# Emergent deployment to pick them up.
 memory/test_credentials.md
 
 # Mobile development
-android-sdk/-e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
+android-sdk/
+
+# NOTE: .env, .env.*, *.env are intentionally NOT in this ignore list because
+# Emergent deployment requires the .env files (frontend/.env + backend/.env)
+# to be in the repository to inject runtime env vars. Pre-commit duplicates
+# previously inserted by tooling have been removed (Sprint 5a deployment
+# health check, 2026-04-25).
