@@ -23,6 +23,12 @@ from pydantic import BaseModel, Field, EmailStr
 import json
 import asyncio
 
+# Sprint Batch 2 ISSUE-005: rate limiting (slowapi)
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("oze-crm")
 
@@ -66,6 +72,31 @@ def _validate_jwt_secret() -> None:
 _validate_jwt_secret()
 
 app = FastAPI(title="OZE CRM API")
+
+# Sprint Batch 2 ISSUE-005 — rate limiting setup
+def _user_or_ip_key(request: Request) -> str:
+    """Per-token fingerprint when an Authorization header is present, else IP.
+    The token suffix is enough to fingerprint a user without decoding the JWT."""
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer ") and len(auth) > 16:
+        return f"token:{auth[-32:]}"
+    return get_remote_address(request)
+
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["300/minute"],  # generous global default; overridden per-route
+    # Batch 2 ISSUE-005: tests share a single IP (127.0.0.1) and hammer
+    # /auth/login through fixtures — disable the limiter when RATELIMIT_DISABLED=1
+    # (also auto-disabled in APP_ENV=test for safety).
+    enabled=not (
+        os.environ.get("RATELIMIT_DISABLED") == "1"
+        or os.environ.get("APP_ENV", "").lower() in ("test", "testing")
+    ),
+)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 api = APIRouter(prefix="/api")
 bearer = HTTPBearer(auto_error=False)
 
@@ -334,7 +365,8 @@ class ContractUpdate(BaseModel):
 
 
 @api.post("/auth/login")
-async def login(body: LoginIn):
+@limiter.limit("5/15minute")
+async def login(request: Request, body: LoginIn):
     email = body.email.lower().strip()
     user = await db.users.find_one({"email": email}, {"_id": 0})
     if not user or not verify_password(body.password, user["password_hash"]):
@@ -349,7 +381,8 @@ async def me(user: Dict[str, Any] = Depends(get_current_user)):
 
 
 @api.post("/auth/change-password")
-async def change_password(body: ChangePasswordIn, user: Dict[str, Any] = Depends(get_current_user)):
+@limiter.limit("10/hour", key_func=_user_or_ip_key)
+async def change_password(request: Request, body: ChangePasswordIn, user: Dict[str, Any] = Depends(get_current_user)):
     """Force-password-change flow. Accepts current_password + new_password.
 
     Rules:
@@ -485,14 +518,19 @@ async def list_leads(user: Dict[str, Any] = Depends(get_current_user)):
 
 
 @api.post("/leads")
-async def create_lead(body: LeadIn, request: Request, user: Dict[str, Any] = Depends(get_current_user)):
+@limiter.limit("30/minute", key_func=_user_or_ip_key)
+async def create_lead(request: Request, body: LeadIn, user: Dict[str, Any] = Depends(get_current_user)):
     if body.status not in LEAD_STATUSES:
         raise HTTPException(status_code=400, detail="Invalid status")
 
     # Sprint 1.5 — idempotency replay guard (MUST run before photo/anti-collision checks)
     idempotency_key = request.headers.get("Idempotency-Key")
     if idempotency_key:
-        existing_idem = await db.leads.find_one({"idempotency_key": idempotency_key}, {"_id": 0})
+        # Batch 2 ISSUE-004: scope idempotency to per-user (compound index).
+        existing_idem = await db.leads.find_one(
+            {"created_by": user["id"], "idempotency_key": idempotency_key},
+            {"_id": 0},
+        )
         if existing_idem:
             # Return the previously-created lead — identical response shape.
             existing_idem["created_at"] = iso(existing_idem.get("created_at"))
@@ -801,7 +839,8 @@ def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
 
 
 @api.put("/rep/location")
-async def push_rep_location(body: RepLocationIn, user: Dict[str, Any] = Depends(require_roles("handlowiec", "manager", "admin"))):
+@limiter.limit("60/minute", key_func=_user_or_ip_key)
+async def push_rep_location(request: Request, body: RepLocationIn, user: Dict[str, Any] = Depends(require_roles("handlowiec", "manager", "admin"))):
     ts = now()
     # Fetch previous point to compute track polyline increment + session stats
     prev = await db.rep_locations.find_one({"user_id": user["id"]}, {"_id": 0})
@@ -2133,9 +2172,10 @@ async def preview_cost(
 
 
 @api.post("/contracts")
+@limiter.limit("20/minute", key_func=_user_or_ip_key)
 async def create_contract(
-    body: ContractIn,
     request: Request,
+    body: ContractIn,
     user: Dict[str, Any] = Depends(get_current_user),
     _pw_check: Dict[str, Any] = Depends(require_password_changed),
 ):
@@ -2200,7 +2240,11 @@ async def create_contract(
     # K6: idempotency — protect against duplicate POST from network retries on 2G
     idempotency_key = request.headers.get("Idempotency-Key") or request.headers.get("X-Idempotency-Key")
     if idempotency_key:
-        existing = await db.contracts.find_one({"idempotency_key": idempotency_key}, {"_id": 0})
+        # Batch 2 ISSUE-004: scope to per-user
+        existing = await db.contracts.find_one(
+            {"created_by": user["id"], "idempotency_key": idempotency_key},
+            {"_id": 0},
+        )
         if existing:
             # Return existing contract (idempotent replay) instead of creating duplicate
             return _serialize_contract(existing)
@@ -2306,7 +2350,10 @@ async def create_contract(
     except Exception as e:
         # Race condition — another concurrent POST won the insert; try to fetch by key
         if idempotency_key:
-            existing = await db.contracts.find_one({"idempotency_key": idempotency_key}, {"_id": 0})
+            existing = await db.contracts.find_one(
+                {"created_by": user["id"], "idempotency_key": idempotency_key},
+                {"_id": 0},
+            )
             if existing:
                 return _serialize_contract(existing)
         raise HTTPException(status_code=500, detail=f"Insert failed: {e}")
@@ -2316,27 +2363,25 @@ async def create_contract(
 
     # Sprint 3a — broadcast contract_signed event for confetti (best-effort,
     # never block successful POST /contracts on broadcaster errors).
+    # Batch 2 ISSUE-003: scope-aware fan-out + thin payload — frontend will
+    # fetch full details via REST with normal RBAC checks.
     try:
-        rep_user = await db.users.find_one({"id": doc["rep_id"]}, {"_id": 0, "name": 1, "id": 1})
-        rep_name = rep_user.get("name") if rep_user else "Handlowiec"
-        lead_doc = await db.leads.find_one({"id": body.lead_id}, {"_id": 0, "client_name": 1})
-        client_name = (lead_doc or {}).get("client_name") or doc.get("client_name")
+        # Look up the rep's manager so we can include them in the scope.
+        rep_user = await db.users.find_one(
+            {"id": doc["rep_id"]}, {"_id": 0, "manager_id": 1}
+        )
+        owner_manager_id = (rep_user or {}).get("manager_id")
         await event_broadcaster.broadcast(
             "contract_signed",
             {
                 "contract_id": doc["id"],
-                "lead_id": doc["lead_id"],
-                "client_name": client_name,
                 "rep_id": doc["rep_id"],
-                "rep_name": rep_name,
-                "gross_amount": doc.get("gross_amount"),
-                "commission_amount": doc.get("commission_amount"),
-                "signed_at": iso(doc.get("signed_at")),
-                # Sprint 4.5 — high-margin flag for extra-large confetti variant
-                "computed_margin": doc.get("computed_margin"),
-                "margin_pct_of_cost": doc.get("margin_pct_of_cost"),
+                # Public flag for confetti decision (mine-mega vs normal)
                 "is_high_margin": (doc.get("margin_pct_of_cost") or 0) >= 50.0,
+                "signed_at": iso(doc.get("signed_at")),
             },
+            rep_id=doc["rep_id"],
+            manager_id=owner_manager_id,
         )
     except Exception as e:
         logger.warning(f"event_broadcaster broadcast(contract_signed) failed: {e}")
@@ -2618,11 +2663,39 @@ async def ensure_indexes_and_migrations():
     await db.contracts.create_index("rep_id")
     await db.contracts.create_index("owner_manager_id")
     await db.contracts.create_index("signed_at")
-    await db.contracts.create_index("idempotency_key", sparse=True)
+    # Note: legacy single-field idempotency_key index removed (Batch 2 ISSUE-004).
+    # Replaced by compound (created_by, idempotency_key) created earlier in this fn.
     await db.contract_audit_log.create_index("contract_id")
     await db.contract_audit_log.create_index("changed_at")
-    # Sprint 1.5 — idempotency for offline queue retry of POST /leads
-    await db.leads.create_index("idempotency_key", sparse=True, unique=True)
+    # Sprint 1.5 / Batch 2 ISSUE-004 — idempotency scope migration.
+    # Drop legacy GLOBAL unique index (idempotency_key_1) on both collections,
+    # then create the compound (created_by, idempotency_key) unique index
+    # gated by partialFilterExpression so docs with idempotency_key absent OR
+    # null don't conflict (sparse alone is not enough — many existing docs
+    # have idempotency_key:null persisted).
+    for coll_name in ("contracts", "leads"):
+        coll = db[coll_name]
+        for legacy_name in ("idempotency_key_1", "created_by_idempotency_key"):
+            try:
+                await coll.drop_index(legacy_name)
+                logger.info(
+                    f"ISSUE-004: dropped {legacy_name} on {coll_name} (will be recreated)"
+                )
+            except Exception:
+                pass
+        try:
+            await coll.create_index(
+                [("created_by", 1), ("idempotency_key", 1)],
+                unique=True,
+                name="created_by_idempotency_key",
+                partialFilterExpression={
+                    "idempotency_key": {"$type": "string"}
+                },
+            )
+        except Exception as e:
+            logger.warning(
+                f"ISSUE-004: compound idempotency index create on {coll_name} failed: {e}"
+            )
 
     # Migration: ensure must_change_password flag exists on every user (default False)
     try:
@@ -2725,7 +2798,8 @@ async def seed_data():
     await db.contracts.create_index("rep_id")
     await db.contracts.create_index("owner_manager_id")
     await db.contracts.create_index("signed_at")
-    await db.contracts.create_index("idempotency_key", sparse=True)
+    # Note: legacy single-field idempotency_key index removed (Batch 2 ISSUE-004).
+    # Replaced by compound (created_by, idempotency_key) created earlier in this fn.
     await db.contract_audit_log.create_index("contract_id")
     await db.contract_audit_log.create_index("changed_at")
 
@@ -3007,21 +3081,72 @@ class EventBroadcaster:
             self._subs.pop(ws_id, None)
         logger.info(f"WS[events] unsubscribed: {ws_id} ({len(self._subs)} remain)")
 
-    async def broadcast(self, event_type: str, payload: Dict[str, Any]) -> None:
-        """Fan-out a single event to every subscriber. Dead sockets are pruned."""
+    async def broadcast(
+        self,
+        event_type: str,
+        payload: Dict[str, Any],
+        rep_id: Optional[str] = None,
+        manager_id: Optional[str] = None,
+    ) -> None:
+        """Fan-out an event to subscribers based on RBAC scope (Batch 2 ISSUE-003).
+
+        - rep_id is None and manager_id is None  → legacy fan-out to all subs
+          (kept for backwards compat; new code paths SHOULD always pass rep_id).
+        - rep_id is set → only the rep themself, their manager, the explicit
+          manager_id, and any admin receive the event.
+        Dead sockets are pruned on the fly.
+        """
         if not self._subs:
             logger.info(f"event_broadcaster: no subscribers — dropped {event_type}")
             return
+
         msg = json.dumps({"type": event_type, **payload})
         dead_ids: List[str] = []
+        sent_count = 0
+
+        # When scope is set, build a one-shot manager→team-ids cache so we
+        # don't issue a Mongo find() per subscribed manager.
+        manager_team: Dict[str, set] = {}
+        if rep_id is not None:
+            for sub in list(self._subs.values()):
+                u = sub["user"]
+                if u["role"] == "manager" and u["id"] not in manager_team:
+                    reps = await db.users.find(
+                        {"manager_id": u["id"]}, {"id": 1, "_id": 0}
+                    ).to_list(500)
+                    manager_team[u["id"]] = {r["id"] for r in reps} | {u["id"]}
+
         for ws_id, sub in list(self._subs.items()):
+            u = sub["user"]
+            should_send = False
+            if rep_id is None and manager_id is None:
+                should_send = True  # legacy mode
+            elif u["role"] == "admin":
+                should_send = True  # admin sees everything
+            elif u["role"] == "handlowiec":
+                if rep_id == u["id"]:
+                    should_send = True
+            elif u["role"] == "manager":
+                if manager_id and manager_id == u["id"]:
+                    should_send = True
+                elif rep_id in manager_team.get(u["id"], set()):
+                    should_send = True
+
+            if not should_send:
+                continue
             try:
                 await sub["ws"].send_text(msg)
+                sent_count += 1
             except Exception:
                 dead_ids.append(ws_id)
+
         for dead in dead_ids:
             await self.unsubscribe(dead)
-        logger.info(f"event_broadcaster: broadcasted {event_type} to {len(self._subs) - len(dead_ids)} subs")
+
+        logger.info(
+            f"event_broadcaster: {event_type} → {sent_count}/{len(self._subs)} subs "
+            f"(rep_id={rep_id}, manager_id={manager_id})"
+        )
 
 
 event_broadcaster = EventBroadcaster()

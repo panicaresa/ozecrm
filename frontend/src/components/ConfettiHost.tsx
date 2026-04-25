@@ -20,6 +20,7 @@ import * as Haptics from "expo-haptics";
 import { onAppEvent, AppEvent } from "../lib/useAppEventsWS";
 import { useAuth } from "../lib/auth";
 import { colors, radius, spacing } from "../theme";
+import { api } from "../lib/api";
 
 function fmtPln(n?: number): string {
   if (typeof n !== "number" || !isFinite(n)) return "—";
@@ -64,29 +65,67 @@ export const ConfettiHost: React.FC = () => {
 
   useEffect(() => {
     const unsub = onAppEvent("contract_signed", (e) => {
+      // Batch 2 ISSUE-003: WS payload is now THIN — fetch full contract + lead
+      // details via REST (RBAC will 403 if we shouldn't see it; silently drop).
       const evt = e as ContractSignedEvent;
-      setEvent(evt);
-      setVisible(true);
-      const isMine = !!user && evt.rep_id === user.id;
-      const isHighMargin = evt.is_high_margin === true;
-      if (isMine && Platform.OS !== "web") {
-        try {
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-          // Sprint 4.5 — second pulse for high-margin mega celebration
-          if (isHighMargin) {
-            setTimeout(() => {
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-            }, 500);
+      const enrich = async () => {
+        let enriched: ContractSignedEvent = { ...evt };
+        if (evt.contract_id) {
+          try {
+            const cr = await api.get(`/contracts/${evt.contract_id}`);
+            const c: any = cr.data || {};
+            enriched = {
+              ...enriched,
+              lead_id: c.lead_id,
+              gross_amount: c.gross_amount,
+              commission_amount: c.commission_amount,
+              rep_name: c.rep_name,
+            };
+            if (c.lead_id) {
+              try {
+                const lr = await api.get(`/leads/${c.lead_id}`);
+                enriched.client_name = (lr.data || {}).client_name;
+              } catch (le: any) {
+                if (le?.response?.status !== 403 && le?.response?.status !== 404) {
+                  console.warn("ConfettiHost: failed to fetch lead", le);
+                }
+              }
+            }
+          } catch (err: any) {
+            const st = err?.response?.status;
+            if (st === 403 || st === 404) {
+              // Correct scope filter (event was for a team we're not in) or
+              // race condition (contract deleted between event and fetch).
+              // Silent — no confetti for us.
+              return;
+            }
+            console.warn("ConfettiHost: failed to fetch contract", err);
+            // Still show a minimal "someone signed" toast (no PII visible).
           }
-        } catch {}
-      }
-      if (dismissTimer.current) clearTimeout(dismissTimer.current);
-      // Mine + high-margin → 6s; mine → 5.2s; other → 3.6s
-      const ttl = isMine && isHighMargin ? 6200 : isMine ? 5200 : 3600;
-      dismissTimer.current = setTimeout(() => {
-        setVisible(false);
-        setEvent(null);
-      }, ttl);
+        }
+
+        setEvent(enriched);
+        setVisible(true);
+        const isMine = !!user && enriched.rep_id === user.id;
+        const isHighMargin = enriched.is_high_margin === true;
+        if (isMine && Platform.OS !== "web") {
+          try {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+            if (isHighMargin) {
+              setTimeout(() => {
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+              }, 500);
+            }
+          } catch {}
+        }
+        if (dismissTimer.current) clearTimeout(dismissTimer.current);
+        const ttl = isMine && isHighMargin ? 6200 : isMine ? 5200 : 3600;
+        dismissTimer.current = setTimeout(() => {
+          setVisible(false);
+          setEvent(null);
+        }, ttl);
+      };
+      enrich();
     });
     return () => {
       unsub();
