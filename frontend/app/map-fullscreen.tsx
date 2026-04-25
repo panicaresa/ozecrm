@@ -25,12 +25,14 @@ import { colors, radius, spacing, statusColor, statusLabel } from "../src/theme"
 import { api, formatApiError } from "../src/lib/api";
 import { useAuth } from "../src/lib/auth";
 import { LeadMap } from "../src/components/LeadMap";
+import { RepActionSheet, RepActionSheetRep } from "../src/components/RepActionSheet";
 import { useRepLocationsWS } from "../src/lib/useRepLocationsWS";
 import type { Lead } from "../src/components/LeadCard";
 
 interface DashboardData {
   pins: any[];
   reps_live: any[];
+  rep_progress?: any[]; // Sprint 5-pre-quad — match for KPI in RepActionSheet
 }
 
 export default function MapFullscreen() {
@@ -50,6 +52,8 @@ export default function MapFullscreen() {
   const [selectedPinId, setSelectedPinId] = useState<string | null>(null);
   const [selectedRepId, setSelectedRepId] = useState<string | null>(null);
   const [layers, setLayers] = useState({ leads: true, reps: true });
+  // Sprint 5-pre-quad — RepActionSheet trigger.
+  const [actionSheetRep, setActionSheetRep] = useState<RepActionSheetRep | null>(null);
 
   // Live WS updates (reuses the same hook the dashboard uses)
   const ws = useRepLocationsWS(true);
@@ -292,12 +296,41 @@ export default function MapFullscreen() {
                 setSelectedRepId(id);
                 setSelectedPinId(null);
               }}
+              onRepActionRequested={(rep) => {
+                const progress = (data?.rep_progress || []).find(
+                  (p: any) => p?.user_id === rep.user_id
+                );
+                setActionSheetRep({
+                  user_id: rep.user_id,
+                  name: rep.name,
+                  phone: (rep as any).phone,
+                  email: (rep as any).email,
+                  active: rep.active,
+                  battery: rep.battery,
+                  last_seen_seconds: rep.last_seen_seconds,
+                  session_seconds: (rep as any).session_seconds,
+                  signed: progress?.signed,
+                  total_leads: progress?.total_leads ?? progress?.total,
+                  target: progress?.target,
+                  percent: progress?.percent,
+                });
+              }}
               height={mapHeight}
               testID="map-fullscreen-leadmap"
             />
           </View>
         )}
       </SafeAreaView>
+
+      {/* Sprint 5-pre-quad — Rep tap-to-action sheet. Scope inferred from
+          authenticated user role (admin → admin, anything else → manager). */}
+      <RepActionSheet
+        visible={!!actionSheetRep}
+        onClose={() => setActionSheetRep(null)}
+        rep={actionSheetRep}
+        scope={user?.role === "admin" ? "admin" : "manager"}
+        testID="map-fs-rep-action-sheet"
+      />
     </>
   );
 }

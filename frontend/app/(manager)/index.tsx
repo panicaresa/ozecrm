@@ -19,6 +19,7 @@ import { KpiTile } from "../../src/components/KpiTile";
 import { ProgressRow } from "../../src/components/ProgressRow";
 import { StatusDonut } from "../../src/components/StatusDonut";
 import { LeadMap } from "../../src/components/LeadMap";
+import { RepActionSheet, RepActionSheetRep } from "../../src/components/RepActionSheet";
 import { BrandLogo } from "../../src/components/BrandLogo";
 import { QueueBadge } from "../../src/components/QueueBadge";
 import { CommissionCalculator } from "../../src/components/CommissionCalculator";
@@ -57,6 +58,11 @@ export default function ManagerDashboard() {
   // Sprint 5-pre-bis (ISSUE-UX-004): show first 5 reps in "Cele i postęp"
   // by default; user taps "Pokaż wszystkich (N)" to inline-expand.
   const [progressExpanded, setProgressExpanded] = useState(false);
+  // Sprint 5-pre-quad — RepActionSheet trigger. Fires when the user taps a
+  // rep marker on the LeadMap. Composed payload includes KPI from
+  // rep_progress[] so the sheet can show "umowy/leady/postęp" without a
+  // second round-trip.
+  const [actionSheetRep, setActionSheetRep] = useState<RepActionSheetRep | null>(null);
   // Sprint 4 — poll rep activity every 60s; data is keyed by rep_id.
   const { data: activityData } = useRepActivity(true, 60_000);
   const activityByRepId = React.useMemo(() => {
@@ -395,6 +401,30 @@ export default function ManagerDashboard() {
               setSelectedPinId(null);
               setFilterStatus(null);
             }}
+            onRepActionRequested={(rep) => {
+              // Sprint 5-pre-quad: compose a RepActionSheet payload that
+              // merges marker data (lat/lng/battery/active/last_seen) with
+              // KPI from rep_progress[] (signed/total_leads/target/percent),
+              // matched by user_id. Either side may be missing — sheet
+              // degrades gracefully.
+              const progress = (data?.rep_progress || []).find(
+                (p: any) => p?.user_id === rep.user_id
+              );
+              setActionSheetRep({
+                user_id: rep.user_id,
+                name: rep.name,
+                phone: (rep as any).phone,
+                email: (rep as any).email,
+                active: rep.active,
+                battery: rep.battery,
+                last_seen_seconds: rep.last_seen_seconds,
+                session_seconds: (rep as any).session_seconds,
+                signed: progress?.signed,
+                total_leads: progress?.total_leads ?? progress?.total,
+                target: progress?.target,
+                percent: progress?.percent,
+              });
+            }}
             testID="lead-map"
           />
           {/* Live WS status indicator */}
@@ -661,6 +691,17 @@ export default function ManagerDashboard() {
           <CommissionCalculator testID="manager-commission-calculator" />
         </View>
       </ScrollView>
+
+      {/* Sprint 5-pre-quad — Rep tap-to-action sheet. Triggered from
+          LeadMap rep marker / web rep row. scope="manager" → routes to
+          /(manager)/rep/[id]. */}
+      <RepActionSheet
+        visible={!!actionSheetRep}
+        onClose={() => setActionSheetRep(null)}
+        rep={actionSheetRep}
+        scope="manager"
+        testID="manager-rep-action-sheet"
+      />
     </SafeAreaView>
   );
 }

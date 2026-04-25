@@ -1445,6 +1445,11 @@ async def manager_dashboard(user: Dict[str, Any] = Depends(require_roles("manage
             {
                 "user_id": u["id"],
                 "name": u.get("name") or u["email"],
+                # Sprint 5-pre-quad (rep tap-to-action): expose phone+email
+                # so the manager/admin map can offer a "Zadzwoń" tap action
+                # without a second round-trip to /users.
+                "phone": u.get("phone"),
+                "email": u.get("email"),
                 "avatar_url": u.get("avatar_url"),
                 "lat": rl["latitude"],
                 "lng": rl["longitude"],
@@ -3044,7 +3049,7 @@ async def seed_data():
     manager_pw = os.environ["MANAGER_PASSWORD"]
     rep_pw = os.environ["REP_PASSWORD"]
 
-    async def upsert_user(email, pw, name, role, manager_id=None, avatar=None):
+    async def upsert_user(email, pw, name, role, manager_id=None, avatar=None, phone=None):
         existing = await db.users.find_one({"email": email})
         if not existing:
             uid = str(uuid.uuid4())
@@ -3057,6 +3062,10 @@ async def seed_data():
                     "role": role,
                     "manager_id": manager_id,
                     "avatar_url": avatar,
+                    # Sprint 5-pre-quad — phone for tap-to-call demo on the
+                    # manager map. Optional; users without a phone get a
+                    # "Brak numeru" tile in the RepActionSheet.
+                    "phone": phone,
                     # Batch B-fix #3C: demo users NEVER carry a force-change flag
                     # — they are disposable dev credentials, not production accounts.
                     "must_change_password": False,
@@ -3067,6 +3076,9 @@ async def seed_data():
         # Ensure flag is explicitly False for existing demo users (idempotent).
         if existing.get("must_change_password") is True:
             await db.users.update_one({"email": email}, {"$set": {"must_change_password": False}})
+        # Sprint 5-pre-quad — backfill missing phone on existing demo users.
+        if phone and not existing.get("phone"):
+            await db.users.update_one({"email": email}, {"$set": {"phone": phone}})
         if not verify_password(pw, existing["password_hash"]):
             await db.users.update_one(
                 {"email": email},
@@ -3075,7 +3087,7 @@ async def seed_data():
         return existing["id"]
 
     admin_id = await upsert_user(admin_email, admin_pw, "Admin OZE", "admin")
-    manager_id = await upsert_user(manager_email, manager_pw, "Marek Manager", "manager")
+    manager_id = await upsert_user(manager_email, manager_pw, "Marek Manager", "manager", phone="+48 500 000 002")
     rep_id = await upsert_user(
         rep_email,
         rep_pw,
@@ -3083,16 +3095,17 @@ async def seed_data():
         "handlowiec",
         manager_id=manager_id,
         avatar="https://images.unsplash.com/photo-1758518727888-ffa196002e59?w=400&q=85",
+        phone="+48 500 100 200",
     )
 
     demo_reps = [
-        ("anna@test.com", "Anna Kowalska", "https://images.unsplash.com/photo-1655249493799-9cee4fe983bb?w=400&q=85"),
-        ("piotr@test.com", "Piotr Nowak", "https://images.unsplash.com/photo-1655249481446-25d575f1c054?w=400&q=85"),
-        ("ewa@test.com", "Ewa Wiśniewska", None),
+        ("anna@test.com", "Anna Kowalska", "https://images.unsplash.com/photo-1655249493799-9cee4fe983bb?w=400&q=85", "+48 500 100 201"),
+        ("piotr@test.com", "Piotr Nowak", "https://images.unsplash.com/photo-1655249481446-25d575f1c054?w=400&q=85", "+48 500 100 202"),
+        ("ewa@test.com", "Ewa Wiśniewska", None, "+48 500 100 203"),
     ]
     demo_rep_ids = [rep_id]
-    for email, name, avatar in demo_reps:
-        rid = await upsert_user(email, "test1234", name, "handlowiec", manager_id=manager_id, avatar=avatar)
+    for email, name, avatar, phone in demo_reps:
+        rid = await upsert_user(email, "test1234", name, "handlowiec", manager_id=manager_id, avatar=avatar, phone=phone)
         demo_rep_ids.append(rid)
 
     for uid, target in zip(demo_rep_ids, [10, 12, 8, 10]):

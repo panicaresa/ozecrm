@@ -639,11 +639,106 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Sprint 5-pre-tris — debug + fixes after user testing (map-fullscreen styling, auto-status frontend refetch)"
+    - "Sprint 5-pre-quad — Rep tap-to-action sheet (call/KPI/profile) on map markers"
   stuck_tasks:
     - "Faza 2.0 GET /api/tracking/track/{rep_id} role-scoped"
   test_all: false
   test_priority: "high_first"
+
+# --- Sprint 5-pre-quad (2026-04-25 13:00) — Rep tap-to-action ---
+sprint_5_pre_quad:
+  - task: "Backend: phone+email in /dashboard/manager reps_live[]"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py + tests"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Added "phone" and "email" keys to the dict appended to reps_live[].
+          The pre-existing find query already used an exclusion projection
+          ({"_id": 0, "password_hash": 0}), so both fields were already in
+          the user doc — no projection change needed.
+          New test in TestRepsLiveContact verifies the keys are always
+          present (value can be None for users without phone) and that
+          email is a parseable address.
+
+  - task: "Backend: demo seed phones for all 4 demo reps"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py upsert_user"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          upsert_user gained an optional `phone` parameter; on existing-user
+          path, phone is backfilled if missing (idempotent). Manager and
+          all 4 handlowcy now have +48 500 100 2XX numbers — makes the
+          "Zadzwoń" tile demonstrable in preview without a real device.
+
+  - task: "Frontend: RepActionSheet component (new)"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/components/RepActionSheet.tsx (new)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          New component (~430 lines) modeled after LeadActionSheet pattern:
+          Modal + Pressable backdrop + slide animation on native, fade on
+          web. Sections: identity (avatar+name+online dot+battery+work-time),
+          phone tile (tap → tel: dialer via Linking.openURL; gracefully
+          shows "Brak numeru telefonu" when phone is missing), KPI tiles
+          (Umowy / Leady / Postęp), primary "Zobacz pełny profil" button
+          (router.push to /(scope)/rep/[id]), cancel.
+          Visual smoke confirmed via 2 screenshots (with phone filled vs
+          without phone — both render correctly).
+
+  - task: "Frontend: LeadMap.native + LeadMap.tsx (web fallback) — onRepActionRequested prop"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/LeadMap.native.tsx + LeadMap.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          New optional prop `onRepActionRequested?: (rep: RepPin) => void`
+          fires alongside the existing `onSelectRep`. Native: Marker.onPress
+          calls both. Web: rep row TouchableOpacity calls both. ZERO
+          regression on the existing read-only callout / select logic —
+          parents that don't pass the new prop see the same behaviour as
+          before.
+
+  - task: "Frontend: Manager dashboard + Map-fullscreen integration"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/(manager)/index.tsx + /app/frontend/app/map-fullscreen.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: |
+          Both screens now hold an `actionSheetRep` state, pass
+          onRepActionRequested to LeadMap, and render <RepActionSheet />
+          at end. Composer merges marker data (phone/email/battery/active)
+          with KPI from rep_progress[] (signed/total_leads/target/percent).
+          Map-fullscreen infers scope from auth user role
+          (admin → admin, anything else → manager). Visual smoke confirmed
+          on (manager)/index.tsx — sheet opens with phone tile populated.
 
 # --- Sprint 5-pre-tris (2026-04-25 12:00) — bugfixes from user preview testing ---
 sprint_5_pre_tris:
@@ -2380,3 +2475,83 @@ sprint_5_pre_summary:
       Polski: Funkcja auto-zmiany statusu leada na "podpisana" po utworzeniu
       kontraktu działa poprawnie — bez podwójnych wpisów w audycie i z
       poprawnymi metadanymi (status_auto_changed_reason, status_auto_changed_at).
+
+
+# --- Sprint 5-pre-quad backend retest (appended 2026-04-25 13:10 by testing agent) ---
+agent_communication:
+  - agent: "testing"
+    message: |
+      Sprint 5-pre-quad — Backend testing of phone+email field on
+      /dashboard/manager reps_live[]: ALL CHECKS PASS.
+
+      1) FULL pytest suite (cd /app/backend && pytest tests/test_oze_crm_api.py -v):
+         **98 passed, 2 skipped, 0 failed** ✅ — matches expected baseline.
+         New test TestRepsLiveContact::test_reps_live_includes_phone_and_email_fields
+         passes. The 2 skips are the two pre-existing intentional skips
+         (TestBatchASecurity::test_cors_whitelist_blocks_unknown_origin and
+         TestRateLimiting::test_login_throttled_after_5_attempts_when_enabled —
+         both env-gated).
+
+      2) Manual smoke against public BASE_URL
+         (https://renewable-sales-hub.preview.emergentagent.com/api),
+         script /app/backend_test_sprint5_pre_quad.py — 23/23 PASS:
+         a1) login handlowiec@test.com / test1234 → 200 ✅
+         a2) PUT /api/rep/location {latitude:52.0, longitude:19.0,
+             accuracy:5.0} → 200 {"ok":true, "track_len":N} ✅
+             (Note: backend Pydantic model uses field names `latitude`/
+             `longitude` — the review spec wording "lat=52.0, lng=19.0"
+             was just shorthand, not a literal field name.)
+         b1) login manager@test.com → 200 ✅
+         b2) GET /api/dashboard/manager → 200 ✅
+         b3) reps_live[] non-empty (5 reps after seeding all 4 demo
+             handlowcy + manager test rep) ✅
+         c1) reps_live[0] has key "phone" ✅
+         c2) reps_live[0] has key "email" ✅
+         c3) Existing fields user_id / name / lat / lng all still present —
+             no regression on the previously-tested shape ✅
+         c4) reps_live[0].email parses as a valid address (handlowiec@test.com,
+             ewa@test.com, etc.) ✅
+
+         d) PHONE NON-NULL FOR ALL SEEDED USERS (manager + 4 handlowcy):
+            handlowiec@test.com → "+48 500 100 200" ✅
+            anna@test.com       → "+48 500 100 201" ✅
+            piotr@test.com      → "+48 500 100 202" ✅
+            ewa@test.com        → "+48 500 100 203" ✅
+            All four start with "+48" prefix as documented in upsert_user
+            seed code. Manager themselves (manager@test.com) does not
+            appear in their own /dashboard/manager.reps_live (expected —
+            reps_live filters to role=handlowiec only).
+
+      3) BACKWARD COMPAT (Sprint 5-pre + Sprint 5-pre-bis still green):
+         bc1) PUT /api/rep/location/batch with 3 distinct points as
+              handlowiec → 200
+              {"ok":true,"track_len":N,"appended":3,"received":3} ✅
+         bc2a) POST /api/leads (umowione, photo_base64, GPS, meeting_at
+              tomorrow) → 200, lead created with id ✅
+         bc2b) POST /api/contracts (cash, signed_at=yesterday,
+              financing_type=cash, gross_amount=50000, down_payment=5000,
+              installments=12, building_type=mieszkalny, roof_area_m2=100)
+              → 200 contract created ✅
+         bc2c) Lead.status auto-flipped to "podpisana"
+              (Sprint 5-pre-bis ISSUE-UX-001) ✅
+         bc2d) Lead.status_auto_changed_reason == "contract_created" ✅
+         Backend log line confirmed in /var/log/supervisor/backend.err.log:
+              "Lead 7df1719b-8e8d-4a1c-b4a2-03310496f432 status auto-changed:
+               umowione → podpisana (contract cf0909e9-…)"
+         (111 such lines total across the test session — auto-status fires
+         on every contract create as expected.)
+
+      Sprint 5-pre-quad backend implementation is **production-ready**. The
+      two new keys `phone` + `email` on reps_live[] are present for ALL
+      seeded users, populated with the new +48 500 100 20X seed values,
+      no regression on user_id/name/lat/lng/active/battery/last_seen_seconds/
+      activity_status etc.
+
+      Polski:
+      Test backend Sprint 5-pre-quad zakończony sukcesem. Wszystkie 98
+      testów pytest zielone (2 pominięte = preexisting środowiskowe).
+      Manualne testy przeciwko publicznemu URL — 23/23 PASS. Pola phone
+      i email są obecne w reps_live[] dla wszystkich 4 zalogowanych
+      handlowców (jan, anna, piotr, ewa) z polskimi numerami +48 500 100 20X.
+      Funkcje wsteczne (Sprint 5-pre /location/batch i Sprint 5-pre-bis
+      auto-zmiana statusu leada) działają bez regresji.

@@ -40,6 +40,10 @@ interface Props {
   onToggleLayer?: (key: keyof LayerState) => void;
   onSelectRep?: (id: string | null) => void;
   selectedRepId?: string | null;
+  // Sprint 5-pre-quad: opens RepActionSheet (call/profile/KPI) on rep marker tap.
+  // Fires alongside onSelectRep — kept independent so existing read-only
+  // callout behaviour stays untouched.
+  onRepActionRequested?: (rep: RepPin) => void;
 }
 
 function repInitials(name?: string | null) {
@@ -72,6 +76,7 @@ export const LeadMap: React.FC<Props> = ({
   onToggleLayer,
   onSelectRep,
   selectedRepId,
+  onRepActionRequested,
 }) => {
   const safePins = Array.isArray(pins) ? pins : [];
   const safeReps = Array.isArray(reps) ? reps : [];
@@ -125,7 +130,10 @@ export const LeadMap: React.FC<Props> = ({
                 <Marker
                   key={`rep-${r.user_id}`}
                   coordinate={{ latitude: r.lat, longitude: r.lng }}
-                  onPress={() => onSelectRep?.(r.user_id)}
+                  onPress={() => {
+                    onSelectRep?.(r.user_id);
+                    onRepActionRequested?.(r);
+                  }}
                   anchor={{ x: 0.5, y: 0.5 }}
                   zIndex={10}
                 >

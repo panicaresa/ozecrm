@@ -3328,3 +3328,40 @@ class TestAutoStatusOnContract:
         self._cleanup()
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Sprint 5-pre-quad — reps_live includes phone+email (rep tap-to-action)
+# ═══════════════════════════════════════════════════════════════════════════
+class TestRepsLiveContact:
+    """The /api/dashboard/manager response must include `phone` and `email`
+    on each reps_live[] entry so the manager mobile map can show a one-tap
+    "Zadzwoń" action without an extra round-trip."""
+
+    def test_reps_live_includes_phone_and_email_fields(
+        self, api_client, manager_token, rep_token
+    ):
+        # Seed a rep_locations doc by pinging the single-point endpoint;
+        # the dashboard then surfaces the rep in reps_live[] reliably.
+        ping = api_client.put(
+            f"{BASE_URL}/api/rep/location",
+            json={"latitude": 52.0, "longitude": 19.0, "accuracy": 10.0},
+            headers={"Authorization": f"Bearer {rep_token}"},
+        )
+        assert ping.status_code == 200, ping.text
+
+        r = api_client.get(
+            f"{BASE_URL}/api/dashboard/manager",
+            headers={"Authorization": f"Bearer {manager_token}"},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        reps_live = body.get("reps_live") or []
+        assert len(reps_live) >= 1, "expected at least 1 rep in reps_live"
+
+        first = reps_live[0]
+        # Field MUST exist on every entry (value can be None for users without phone)
+        assert "phone" in first, f"phone missing from reps_live[0]: {first}"
+        assert "email" in first, f"email missing from reps_live[0]: {first}"
+        # email is always populated by the seed (handlowiec@test.com)
+        assert isinstance(first.get("email"), str) and "@" in first["email"]
+
+

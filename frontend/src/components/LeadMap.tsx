@@ -39,6 +39,9 @@ interface Props {
   onToggleLayer?: (key: keyof LayerState) => void;
   onSelectRep?: (id: string | null) => void;
   selectedRepId?: string | null;
+  // Sprint 5-pre-quad: fired alongside onSelectRep so the parent can open
+  // a RepActionSheet (call/profile/KPI). Web fallback wires the same.
+  onRepActionRequested?: (rep: RepPin) => void;
 }
 
 function formatLastSeen(s?: number | null): string {
@@ -72,6 +75,7 @@ export const LeadMap: React.FC<Props> = ({
   onToggleLayer,
   onSelectRep,
   selectedRepId,
+  onRepActionRequested,
 }) => {
   const validLeads = pins.filter((p) => typeof p.lat === "number" && typeof p.lng === "number");
   const validReps = reps.filter((r) => typeof r.lat === "number" && typeof r.lng === "number");
@@ -92,7 +96,13 @@ export const LeadMap: React.FC<Props> = ({
               <TouchableOpacity
                 key={`rep-${r.user_id}`}
                 style={[styles.repRow, active && { borderColor: colors.secondary, backgroundColor: "#13294B" }]}
-                onPress={() => onSelectRep?.(active ? null : r.user_id)}
+                onPress={() => {
+                  // Sprint 5-pre-quad: keep the existing select-toggle behaviour
+                  // for the read-only callout, AND fire onRepActionRequested
+                  // so a parent-side RepActionSheet can open with phone/KPI/profile.
+                  onSelectRep?.(active ? null : r.user_id);
+                  onRepActionRequested?.(r);
+                }}
                 testID={`map-rep-${r.user_id}`}
                 activeOpacity={0.8}
               >
